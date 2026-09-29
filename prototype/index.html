@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>上证指数 K 线</title>
+  <style>
+    :root {
+      --bg: #0b0405;
+      --card: #140709;
+      --border: #3a1a1c;
+      --accent: #c8161d;
+      --up: #f0444a;
+      --down: #16a36a;
+      --text: #f3e9e9;
+      --muted: #9b8a8a;
+      --ma5: #f0c89a;
+      --ma10: #8fa6e8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .card {
+      width: 100%; max-width: 900px; background: var(--card);
+      border: 1px solid var(--border); border-top: 2px solid var(--accent);
+      border-radius: 6px; padding: 16px 20px 12px;
+    }
+    .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+    .title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .name { font-size: 22px; font-weight: 700; }
+    .code { font-size: 12px; color: var(--muted); }
+    .price { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .pct { font-size: 15px; font-variant-numeric: tabular-nums; }
+    .up { color: var(--up); } .down { color: var(--down); }
+    .sub { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+    .sub .ma5 { color: var(--ma5); } .sub .ma10 { color: var(--ma10); }
+    .periods { display: flex; gap: 6px; }
+    .periods button {
+      background: transparent; color: #e6c9c9; border: 1px solid #7a2a2e;
+      padding: 4px 8px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 2px;
+    }
+    .periods button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #chart { width: 100%; height: 340px; margin-top: 8px; }
+    .foot { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; gap: 8px; }
+    .foot b { color: var(--text); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <div>
+        <div class="title">
+          <span class="name">上证指数</span>
+          <span class="code">000001.SH</span>
+          <span id="price" class="price"></span>
+          <span id="pct" class="pct"></span>
+        </div>
+        <div class="sub">
+          <span class="ma5">MA5 <span id="ma5">-</span></span>
+          <span class="ma10">MA10 <span id="ma10">-</span></span>
+          <span>红涨 · 绿跌</span>
+          <span id="ohlc"></span>
+        </div>
+      </div>
+      <div class="periods">
+        <button data-p="D" class="active">日K</button>
+        <button data-p="W">周K</button>
+        <button data-p="M">月K</button>
+      </div>
+    </div>
+
+    <div id="chart"></div>
+
+    <div class="foot">
+      <span>数据来源：[数据源]　示例走势，仅作版式演示</span>
+      <b>围炉财经 · 投资的日常</b>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/klinecharts@9.8.12/dist/umd/klinecharts.min.js"></script>
+  <script src="js/data.js"></script>
+  <script>
+    const C = {
+      up: '#f0444a', down: '#16a36a', ma5: '#f0c89a', ma10: '#8fa6e8',
+      grid: 'rgba(255,255,255,0.06)', axisText: '#9b8a8a', cross: 'rgba(255,255,255,0.35)',
+    };
+    const VISIBLE_BARS = 60;
+
+    const fmtBig = (v) => {
+      v = +v;
+      if (Math.abs(v) >= 1e8) return (v / 1e8).toFixed(0) + '亿';
+      if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(0) + '万';
+      return String(Math.round(v));
+    };
+    const pad = (n) => String(n).padStart(2, '0');
+    const fmtDate = (ts, withYear = true) => {
+      const d = new Date(ts);
+      return (withYear ? d.getFullYear() + '-' : '') + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    };
+
+    const chart = klinecharts.init('chart', {
+      locale: 'zh-CN',
+      customApi: {
+        formatBigNumber: fmtBig,
+        // type: 0 tooltip / 1 crosshair / 2 x 轴
+        formatDate: (_, ts, __, type) => (type === 2 && period === 'D' ? fmtDate(ts, false) : fmtDate(ts)),
+      },
+      styles: {
+        grid: {
+          horizontal: { color: C.grid, style: 'dashed', dashedValue: [3, 3] },
+          vertical: { show: false },
+        },
+        candle: {
+          bar: {
+            upColor: C.up, downColor: C.down, noChangeColor: C.axisText,
+            upBorderColor: C.up, downBorderColor: C.down, noChangeBorderColor: C.axisText,
+            upWickColor: C.up, downWickColor: C.down, noChangeWickColor: C.axisText,
+          },
+          priceMark: {
+            high: { show: false }, low: { show: false },
+            last: { upColor: C.up, downColor: C.down, line: { style: 'dashed' } },
+          },
+          tooltip: { showRule: 'none' },
+        },
+        indicator: {
+          bars: [{ upColor: C.up, downColor: C.down, noChangeColor: C.axisText }],
+          lines: [
+            { color: C.ma5, size: 1.5 },
+            { color: C.ma10, size: 1.5 },
+          ],
+          lastValueMark: { show: false },
+          tooltip: { showRule: 'always', text: { color: C.axisText, size: 12 } },
+        },
+        xAxis: { axisLine: { show: false }, tickLine: { show: false }, tickText: { color: C.axisText } },
+        yAxis: { axisLine: { show: false }, tickLine: { show: false }, tickText: { color: C.axisText } },
+        separator: { color: 'rgba(255,255,255,0.08)' },
+        crosshair: {
+          horizontal: { line: { color: C.cross }, text: { backgroundColor: '#3a1a1c', borderColor: '#3a1a1c' } },
+          vertical: { line: { color: C.cross }, text: { backgroundColor: '#3a1a1c', borderColor: '#3a1a1c' } },
+        },
+      },
+    });
+    chart.setPriceVolumePrecision(2, 0);
+
+    // 主图 MA5 / MA10：数值放在页头，图内 tooltip 置空
+    chart.createIndicator({
+      name: 'MA', calcParams: [5, 10],
+      createTooltipDataSource: () => ({ name: '', calcParamsText: '', icons: [], values: [] }),
+    }, true, { id: 'candle_pane' });
+
+    // 副图成交量：只要柱子，不要均量线
+    chart.createIndicator({
+      name: 'VOL', calcParams: [],
+      createTooltipDataSource: () => ({ name: '成交量', calcParamsText: '', icons: [], values: [] }),
+    }, false, { id: 'vol_pane', height: 80, dragEnabled: false });
+
+    // ---------------- 数据 & 页头 ----------------
+    const daily = KData.mockDaily();   // 换成 tushare：KData.fromTushare(rows)
+    let period = 'D';
+    let bars = [];
+
+    const ma = (i, n) => {
+      if (i < n - 1) return null;
+      let s = 0;
+      for (let k = i - n + 1; k <= i; k++) s += bars[k].close;
+      return s / n;
+    };
+
+    function renderHeader(i) {
+      const b = bars[i];
+      const prev = i > 0 ? bars[i - 1].close : b.open;
+      const chg = (b.close - prev) / prev * 100;
+      const cls = chg >= 0 ? 'up' : 'down';
+      const $ = (id) => document.getElementById(id);
+      $('price').textContent = b.close.toFixed(2);
+      $('price').className = 'price ' + cls;
+      $('pct').textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+      $('pct').className = 'pct ' + cls;
+      const m5 = ma(i, 5), m10 = ma(i, 10);
+      $('ma5').textContent = m5 == null ? '-' : m5.toFixed(2);
+      $('ma10').textContent = m10 == null ? '-' : m10.toFixed(2);
+      $('ohlc').textContent = i === bars.length - 1 ? '' :
+        `${fmtDate(b.timestamp)}  开 ${b.open.toFixed(2)}  高 ${b.high.toFixed(2)}  低 ${b.low.toFixed(2)}  量 ${fmtBig(b.volume)}`;
+    }
+
+    function load(p) {
+      period = p;
+      bars = KData.aggregate(daily, p);
+      chart.applyNewData(bars);
+      fitBars();
+      renderHeader(bars.length - 1);
+    }
+
+    function fitBars() {
+      const w = document.getElementById('chart').clientWidth - 70; // 减去右侧 y 轴宽度
+      chart.setOffsetRightDistance(12);
+      chart.setBarSpace(Math.max(4, Math.min(w / VISIBLE_BARS, 24)));
+    }
+
+    chart.subscribeAction('onCrosshairChange', (c) => {
+      const i = c && c.kLineData ? bars.findIndex((b) => b.timestamp === c.kLineData.timestamp) : -1;
+      renderHeader(i >= 0 ? i : bars.length - 1);
+    });
+    document.getElementById('chart').addEventListener('mouseleave', () => renderHeader(bars.length - 1));
+
+    document.querySelectorAll('.periods button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.periods button').forEach((b) => b.classList.toggle('active', b === btn));
+        load(btn.dataset.p);
+      });
+    });
+
+    window.addEventListener('resize', () => { chart.resize(); fitBars(); });
+
+    load('D');
+  </script>
+</body>
+</html>

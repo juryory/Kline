@@ -1,0 +1,29 @@
+{
+  "name": "kline-live",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c yellow,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node --watch --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
+    "sync": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning scripts/sync.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "echarts": "^6.1.0",
+    "klinecharts": "^9.8.12",
+    "pinyin-pro": "^3.29.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "vite": "^8.3.1"
+  }
+}
