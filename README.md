@@ -113,6 +113,7 @@ npm run token -- secret      # 生成 AUTH_SECRET / RENDER_KEY，填进 .env（A
 - 角色：`admin`（全部操作 + 触发数据同步）、`control`（导播台全部操作）、`render`（只读 key，只能接收画面数据）。
 - JWT payload：`{ sub, name, role: 'admin' | 'control', exp }`，`exp` 必填。凭证按顺序取 `Authorization: Bearer`、Cookie、`?token=`（仅调试）。
 - 导播台、预览、`/api/*` 需要登录；直播画面和 `/api/macro` 可用 `RENDER_KEY`；`POST /api/sync` 需要 `admin`。
+- 直播画面地址 `/render?key=<RENDER_KEY>`：登录后打开 `/render` 会自动把 key 补进地址栏，导播台底部也会显示完整地址，可直接复制到 vMix。
 - WebSocket 和改数据的请求校验 Origin，防止别的网站借导播员浏览器里的登录态发指令。
 - 未登录 / 过期时 WebSocket 以 4401 关闭，导播台顶部提示重新登录；连接中 token 到期会被断开。
 - 推荐部署：工作台 `work.example.com`，Kline `kline.example.com`（宝塔反向代理到 8787，开启 HTTPS 和 WebSocket），工作台把 Cookie 写在 `.example.com` 上，两边共享登录态。

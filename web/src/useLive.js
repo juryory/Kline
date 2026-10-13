@@ -12,7 +12,7 @@ export function useLive(role) {
   const [rank, setRank] = useState(null); // 上屏的板块排名
   const [hover, setHover] = useState(null); // 导播台宏观图的悬停位置 { scope, view, index }
   const [connected, setConnected] = useState(false);
-  const [auth, setAuth] = useState(null);           // 本连接的身份 { role, user }
+  const [auth, setAuth] = useState(null);           // 本连接的身份 { role, user, renderKey }
   const [authError, setAuthError] = useState(null); // 'unauthorized' | 'origin'：被服务端拒绝
   const wsRef = useRef(null);
 
@@ -29,7 +29,7 @@ export function useLive(role) {
       ws.onopen = () => { retry = 0; setConnected(true); };
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'auth') { setAuth({ role: msg.role, user: msg.user }); setAuthError(null); }
+        if (msg.type === 'auth') { setAuth({ role: msg.role, user: msg.user, renderKey: msg.renderKey ?? null }); setAuthError(null); }
         else if (msg.type === 'state') setState(msg.state);
         else if (msg.type === 'data') setData(msg);
         else if (msg.type === 'status') setStatus(msg);

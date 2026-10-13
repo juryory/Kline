@@ -6,7 +6,7 @@
  *   不通过时以 4401（未登录 / 已过期）或 4403（来源不允许）关闭连接。
  *
  *   服务端 → 客户端
- *     { type: 'auth',   role, user }                   本连接的身份（连接后第一条）
+ *     { type: 'auth',   role, user, renderKey }        本连接的身份（连接后第一条）；renderKey 只发给已登录的导播 / 管理员
  *     { type: 'state',  state }                       导播状态（标的/周期/显示/视图/指标/设置）
  *     { type: 'data',   symbol, period, source, bars, quote, prevClose? }
  *                       当前要画的 K 线；quote = 当日最新价与昨收（页头用）；分时带昨收
@@ -31,7 +31,7 @@ import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
 import {
-  AUTH_ENABLED, authenticate, hasRole, originAllowed, verifyToken, loginCookie, authSummary,
+  AUTH_ENABLED, authenticate, hasRole, originAllowed, verifyToken, loginCookie, authSummary, renderKeyFor,
 } from './auth.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -382,7 +382,7 @@ wss.on('connection', (ws, req) => {
   ws.alive = true;
   ws.on('pong', () => { ws.alive = true; });
 
-  ws.send(JSON.stringify({ type: 'auth', role: ws.auth.role, user: ws.auth.user?.name ?? null }));
+  ws.send(JSON.stringify({ type: 'auth', role: ws.auth.role, user: ws.auth.user?.name ?? null, renderKey: renderKeyFor(ws.auth.role) }));
   ws.send(JSON.stringify({ type: 'state', state }));
   if (current) ws.send(JSON.stringify(current));
   if (currentRank) ws.send(JSON.stringify(currentRank));

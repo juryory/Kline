@@ -3,3 +3,6 @@
 const KEY = new URLSearchParams(location.search).get('key');
 
 export const withKey = (url) => (KEY ? `${url}${url.includes('?') ? '&' : '?'}key=${encodeURIComponent(KEY)}` : url);
+
+/** 直播画面地址：有 key 时带上，可直接贴进 vMix */
+export const renderUrl = (key) => `${location.origin}/render${key ? `?key=${encodeURIComponent(key)}` : ''}`;

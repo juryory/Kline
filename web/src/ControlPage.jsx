@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLive } from './useLive.js';
+import { renderUrl } from './auth.js';
 import KChart from './KChart.jsx';
 import SymbolSearch from './SymbolSearch.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
@@ -548,7 +549,7 @@ export default function ControlPage() {
             <dt>字母 / 数字</dt><dd>检索标的：000001、SZZS、shangzheng、上证指数</dd>
             <dt>Esc</dt><dd>关闭检索</dd>
           </dl>
-          <p className="hint">vMix 浏览器源：<code>{location.origin}/render</code></p>
+          <p className="hint">vMix 浏览器源：<code>{renderUrl(auth?.renderKey)}</code></p>
         </div>
       </footer>}
     </div>

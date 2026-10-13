@@ -110,6 +110,9 @@ export function loginCookie(req, token, exp) {
   return `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${https ? '; Secure' : ''}`;
 }
 
+/** 已登录的导播 / 管理员可拿到直播画面 key，用来拼出可直接贴进 vMix 的 /render?key=… 地址 */
+export const renderKeyFor = (role) => (RENDER_KEY && hasRole(role, 'control') ? RENDER_KEY : null);
+
 export function authSummary() {
   if (!AUTH_ENABLED) return '未开启（没有配置 AUTH_SECRET，任何人都能控制，只能在内网使用）';
   return `已开启 · Cookie ${AUTH_COOKIE} · 直播画面 key ${RENDER_KEY ? '已配置' : '未配置（直播画面需要登录才能打开）'} · 允许来源 ${ORIGINS.length ? ORIGINS.join(', ') : '同域名'}`;

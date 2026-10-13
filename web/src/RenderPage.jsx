@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLive } from './useLive.js';
+import { renderUrl } from './auth.js';
 import BroadcastPanel from './BroadcastPanel.jsx';
 import RankPanel from './RankPanel.jsx';
 import MacroPanel from './MacroPanel.jsx';
@@ -9,7 +10,13 @@ import MacroPanel from './MacroPanel.jsx';
  * vMix 里浏览器源的宽高要和设置保持一致。
  */
 export default function RenderPage({ preview }) {
-  const { state, data, status, rank, hover } = useLive(preview ? 'preview' : 'render');
+  const { state, data, status, rank, hover, auth } = useLive(preview ? 'preview' : 'render');
+
+  // 登录后直接打开 /render 是靠 Cookie 通过的，地址栏没有 key，复制到 vMix 会打不开：补上 ?key=
+  useEffect(() => {
+    if (preview || !auth?.renderKey || new URLSearchParams(location.search).has('key')) return;
+    history.replaceState(null, '', renderUrl(auth.renderKey) + location.hash);
+  }, [preview, auth?.renderKey]);
 
   useEffect(() => {
     document.documentElement.style.background = 'transparent';
