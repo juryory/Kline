@@ -7,6 +7,9 @@
 
   box-sizing: border-box;
   height: 100vh;
+  height: 100dvh; /* iPad Safari 的 100vh 含地址栏，会多出一截可滚动 */
+  overflow: hidden;
+  touch-action: manipulation; /* 触屏：禁双击放大，按钮点击不延迟 */
   display: flex;
   flex-direction: column;
   background: #0f0f12;
@@ -40,10 +43,13 @@
 .term .seg { display: flex; gap: 4px; }
 .term .onair { font-weight: 600; min-width: 120px; }
 .term .onair.live { background: #1f7a3d; border-color: #1f7a3d; }
-.term .status { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); }
-.term .status .link { background: none; border: none; color: #8fb4ff; padding: 0 0 0 8px; }
-.term .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
-.term .dot.on { background: #2ecc71; }
+.term .localmode.on { background: #1d3f6e; border-color: #3b7ddd; color: #cfe2ff; }
+.term .local-banner {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 6px 16px; background: #14243b; color: #cfe2ff; font-size: 13px; border-bottom: 1px solid #1d3f6e;
+}
+.term .local-banner .err { color: #ff8a8a; }
+.term .local-banner button { margin-left: auto; padding: 3px 10px; font-size: 12px; }
 .term .toolbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 8px 16px; border-bottom: 1px solid var(--line);
@@ -151,7 +157,14 @@
 
 /* ---- 主图 ---- */
 .term .body { flex: 1; min-height: 300px; display: flex; }
-.term .chart { flex: 1; min-width: 0; padding: 8px 8px 0 16px; cursor: crosshair; user-select: none; }
+.term .chart { flex: 1; min-width: 0; padding: 8px 8px 0 16px; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.term .chart { touch-action: none; } /* K 线区域的触屏手势全部交给图表（单指平移、双指缩放） */
+.term .chart .draw-del {
+  position: absolute; z-index: 5; transform: translate(-50%, -50%);
+  width: 32px; height: 32px; padding: 0; border-radius: 50%;
+  background: #c8161d; border: 2px solid #ffcc4d; color: #fff;
+  font-size: 20px; line-height: 1; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
 
 /* ---- 画线工具栏 ---- */
 .term .draw-bar {
@@ -168,6 +181,8 @@
 .term .draw-bar button.active { background: #3a2e10; border-color: #ffcc4d; }
 .term .draw-bar button.active .i, .term .draw-bar button.active .l { color: #ffcc4d; }
 .term .draw-bar button.clear { margin-top: auto; }
+.term .draw-bar button.more { border-top: 1px dashed var(--line); border-radius: 0 0 4px 4px; }
+.term .draw-bar button.more .i { color: var(--muted); }
 .term .chart { position: relative; }
 .term .chart.drawing { cursor: copy; }
 .term .draw-hint {
@@ -239,9 +254,17 @@
 .term .modal .chip button { padding: 2px 6px; background: none; border: none; color: var(--muted); }
 .term .modal .chip button:hover { color: #ff8a8a; }
 .term .modal button.add { padding: 4px 10px; font-size: 12px; }
+.term .modal .line-sample { margin-left: 6px; }
 .term .modal .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .term .modal footer { display: flex; gap: 10px; margin-top: 20px; padding: 0; border: none; }
 .term .modal footer .spacer { flex: 1; }
+.term .modal .sync-summary { color: var(--muted); font-size: 12px; }
+.term .modal .sync-summary.bad { color: #ff8a8a; }
+.term .modal .sync-log {
+  margin: 8px 0 0; padding: 8px 10px; max-height: 140px; overflow: auto;
+  background: #0f0f12; border: 1px solid #33333d; border-radius: 4px;
+  color: #b8b8c4; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+}
 .term .side h3 { margin: 0 0 8px; font-size: 14px; }
 .term .side .range { margin: 0 0 12px; color: #cfcfd8; }
 .term .tag { margin-left: 8px; padding: 1px 6px; border-radius: 3px; background: #6b4a12; color: #ffd98a; font-size: 12px; }

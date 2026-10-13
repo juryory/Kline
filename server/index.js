@@ -2,7 +2,11 @@
  * 直播 K 线后端：状态中心 + 行情推送 + 生产环境静态托管
  *
  * WebSocket /ws?role=render|control|preview
+ *   连接时校验身份（见 server/auth.js）：render 需要 RENDER_KEY 或登录，control / preview 需要登录（导播或管理员）。
+ *   不通过时以 4401（未登录 / 已过期）或 4403（来源不允许）关闭连接。
+ *
  *   服务端 → 客户端
+ *     { type: 'auth',   role, user }                   本连接的身份（连接后第一条）
  *     { type: 'state',  state }                       导播状态（标的/周期/显示/视图/指标/设置）
  *     { type: 'data',   symbol, period, source, bars, quote, prevClose? }
  *                       当前要画的 K 线；quote = 当日最新价与昨收（页头用）；分时带昨收
@@ -16,6 +20,7 @@
  */
 import http from 'node:http';
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -25,6 +30,9 @@ import { getDaily, getIntraday, aggregate } from './market.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
+import {
+  AUTH_ENABLED, authenticate, hasRole, originAllowed, verifyToken, loginCookie, authSummary,
+} from './auth.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'dist');
@@ -64,13 +72,15 @@ const DEFAULT_STATE = {
 
 // 画线：可用的图形（KLineChart 内置 overlay），与 web/src/drawTools.js 一致
 const DRAW_TOOLS = ['segment', 'rayLine', 'straightLine', 'horizontalStraightLine', 'priceLine',
-  'parallelStraightLine', 'priceChannelLine', 'fibonacciLine', 'simpleAnnotation'];
+  'parallelStraightLine', 'priceChannelLine', 'fibonacciLine', 'simpleAnnotation', 'brush'];
 const MAX_DRAWINGS = 50; // 每个标的
+const BRUSH_MAX_POINTS = 200; // 画笔（自由线条）的点数上限，与 web/src/drawTools.js 一致
 
 function cleanDrawing(d) {
   if (!d || typeof d.id !== 'string' || d.id.length > 40 || !DRAW_TOOLS.includes(d.name)) return null;
   const points = Array.isArray(d.points)
-    ? d.points.filter((p) => Number.isFinite(p?.t) && Number.isFinite(p?.v)).slice(0, 5).map((p) => ({ t: p.t, v: p.v }))
+    ? d.points.filter((p) => Number.isFinite(p?.t) && Number.isFinite(p?.v))
+      .slice(0, d.name === 'brush' ? BRUSH_MAX_POINTS : 5).map((p) => ({ t: p.t, v: p.v }))
     : [];
   if (!points.length) return null;
   return { id: d.id, name: d.name, points, ...(typeof d.text === 'string' && { text: d.text.slice(0, 40) }) };
@@ -171,6 +181,31 @@ let lastError = null;
 let loadSeq = 0;
 
 // ---------------- 行情加载 ----------------
+/** 组装一份 data 消息（推送给直播画面，或导播台本地浏览时按需拉取） */
+async function buildData(symbol, period, { force = false } = {}) {
+  // quote = 页头的当日行情（最新价 + 昨收），不随周K/月K 变成周/月涨跌
+  let bars, prevClose, quote;
+  if (period === 'T') {
+    ({ bars, prevClose } = await getIntraday(symbol, { force }));
+    quote = { close: bars.at(-1).close, prevClose, date: bars.at(-1).timestamp };
+  } else {
+    const daily = await getDaily(symbol, { force });
+    bars = aggregate(daily, period);
+    const last = daily.at(-1);
+    quote = { close: last.close, prevClose: daily.at(-2)?.close ?? last.open, date: last.timestamp };
+  }
+  return {
+    type: 'data',
+    symbol: publicSymbol(symbol), // 带 type，直播画面据此判断是否为个股（自动隐藏）
+    period,
+    source: adapter.label,
+    bars,
+    quote,
+    ...(prevClose != null && { prevClose }),
+    updatedAt: Date.now(),
+  };
+}
+
 async function loadData({ force = false } = {}) {
   const seq = ++loadSeq;
   const symbol = findSymbol(state.symbol);
@@ -180,33 +215,14 @@ async function loadData({ force = false } = {}) {
     return broadcastStatus();
   }
   try {
-    // quote = 页头的当日行情（最新价 + 昨收），不随周K/月K 变成周/月涨跌
-    let bars, prevClose, quote;
-    if (period === 'T') {
-      ({ bars, prevClose } = await getIntraday(symbol, { force }));
-      quote = { close: bars.at(-1).close, prevClose, date: bars.at(-1).timestamp };
-    } else {
-      const daily = await getDaily(symbol, { force });
-      bars = aggregate(daily, period);
-      const last = daily.at(-1);
-      quote = { close: last.close, prevClose: daily.at(-2)?.close ?? last.open, date: last.timestamp };
-    }
+    const msg = await buildData(symbol, period, { force });
     if (seq !== loadSeq) return; // 期间导播又切了标的，丢弃旧结果
 
     const last = (list) => JSON.stringify(list.at(-1));
     const changed = !current || current.symbol.code !== symbol.code || current.period !== period
-      || current.bars.length !== bars.length || last(current.bars) !== last(bars);
+      || current.bars.length !== msg.bars.length || last(current.bars) !== last(msg.bars);
 
-    current = {
-      type: 'data',
-      symbol: publicSymbol(symbol), // 带 type，直播画面据此判断是否为个股（自动隐藏）
-      period,
-      source: adapter.label,
-      bars,
-      quote,
-      ...(prevClose != null && { prevClose }),
-      updatedAt: Date.now(),
-    };
+    current = msg;
     lastError = null;
     if (changed) broadcast(current);
   } catch (err) {
@@ -304,19 +320,69 @@ function statusMsg() {
   return {
     type: 'status', error: lastError, clients, updatedAt: current?.updatedAt ?? null,
     source: adapterName, intraday: HAS_INTRADAY, rank: HAS_RANK, macro: HAS_MACRO,
+    syncing: !!sync.running,
   };
+}
+
+/** 重新读取当前画面的数据（行情 + 上屏排名），不访问 tushare */
+function refreshAll() {
+  loadData({ force: true });
+  loadRank();
+}
+
+// ---------------- 盘后同步（POST /api/sync 触发，子进程跑 scripts/sync.js） ----------------
+const SYNC_LOG_LINES = 200;
+const sync = { running: null, startedAt: null, finishedAt: null, exitCode: null, log: [] };
+
+function syncInfo() {
+  const { running, ...info } = sync;
+  return { running: !!running, ...info };
+}
+
+function startSync() {
+  if (sync.running) return false;
+  Object.assign(sync, { startedAt: Date.now(), finishedAt: null, exitCode: null, log: [] });
+  const child = spawn(process.execPath,
+    ['--env-file-if-exists=.env', '--disable-warning=ExperimentalWarning', 'scripts/sync.js'],
+    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  sync.running = child;
+  const onData = (chunk) => {
+    for (const line of chunk.toString().split(/\r?\n/)) if (line) sync.log.push(line);
+    if (sync.log.length > SYNC_LOG_LINES) sync.log.splice(0, sync.log.length - SYNC_LOG_LINES);
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  child.on('close', async (code) => {
+    Object.assign(sync, { running: null, finishedAt: Date.now(), exitCode: code });
+    console.log(`[sync] 结束，exit=${code}`);
+    // 同步完：重新载入标的池（新上市股票 / 新概念）并刷新画面
+    await loadUniverse(adapter).catch((err) => console.error('[sync] 标的池重载失败', err.message));
+    refreshAll();
+  });
+  child.on('error', (err) => onData(`[sync] 启动失败：${err.message}`));
+  broadcastStatus();
+  return true;
 }
 
 function broadcastStatus() {
   broadcast(statusMsg());
 }
 
+// 每种连接需要的最低角色：直播画面用只读 key 即可，导播台和导播台里的预览需要登录
+const WS_NEED = { render: 'render', preview: 'control', control: 'control' };
+
 wss.on('connection', (ws, req) => {
-  const role = new URL(req.url, 'http://x').searchParams.get('role');
+  const url = new URL(req.url, 'http://x');
+  const role = url.searchParams.get('role');
   ws.role = ['render', 'control', 'preview'].includes(role) ? role : 'render';
+  // 先验来源和身份，通过之前不发任何数据
+  if (!originAllowed(req)) return ws.close(4403, 'origin not allowed');
+  ws.auth = authenticate(req, url);
+  if (!hasRole(ws.auth.role, WS_NEED[ws.role])) return ws.close(4401, 'unauthorized');
   ws.alive = true;
   ws.on('pong', () => { ws.alive = true; });
 
+  ws.send(JSON.stringify({ type: 'auth', role: ws.auth.role, user: ws.auth.user?.name ?? null }));
   ws.send(JSON.stringify({ type: 'state', state }));
   if (current) ws.send(JSON.stringify(current));
   if (currentRank) ws.send(JSON.stringify(currentRank));
@@ -332,14 +398,17 @@ wss.on('connection', (ws, req) => {
       const index = Number.isInteger(msg.index) && msg.index >= 0 ? msg.index : null;
       broadcast({ type: 'hover', scope: String(msg.scope ?? ''), view: String(msg.view ?? ''), index });
     }
-    else if (msg.type === 'refresh') { loadData({ force: true }); loadRank(); }
+    else if (msg.type === 'refresh') refreshAll();
   });
   ws.on('close', broadcastStatus);
 });
 
 // 心跳：清理掉线但没触发 close 的连接（网线拔了之类）
+// 心跳：清理掉线的连接；登录过期的连接也在这里断开（客户端会提示重新登录）
 setInterval(() => {
+  const now = Date.now() / 1000;
   for (const ws of wss.clients) {
+    if (ws.auth?.exp && ws.auth.exp <= now) { ws.close(4401, 'token expired'); continue; }
     if (!ws.alive) { ws.terminate(); continue; }
     ws.alive = false;
     ws.ping();
@@ -353,14 +422,58 @@ const MIME = {
   '.woff2': 'font/woff2',
 };
 
-function sendJson(res, body) {
-  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+function sendJson(res, body, status = 200) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+// 各接口需要的最低角色；GET /api/sync 查进度是 control，POST 触发同步要 admin（见下面）
+const API_NEED = {
+  '/api/macro': 'render', // 直播画面的宏观图也要用
+  '/api/search': 'control', '/api/rank': 'control', '/api/kline': 'control',
+  '/api/health': 'control', '/api/refresh': 'control', '/api/sync': 'control',
+};
+
+/**
+ * 调试 / 跨域名部署用的登录入口：GET /api/login?token=<JWT>&next=/ → 校验后写入 Cookie 并跳转。
+ * 与工作台同一上级域名部署时，工作台直接写 Cookie，用不到这个接口。
+ */
+function handleLogin(req, res, url) {
+  const p = verifyToken(url.searchParams.get('token'));
+  if (!p) return sendJson(res, { error: 'token 无效或已过期' }, 401);
+  const next = url.searchParams.get('next') || '/';
+  const safeNext = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  res.writeHead(302, { 'set-cookie': loginCookie(req, url.searchParams.get('token'), p.exp), location: safeNext });
+  res.end();
 }
 
 function handleHttp(req, res) {
   const url = new URL(req.url, 'http://x');
 
+  if (url.pathname.startsWith('/api/')) {
+    // 改数据的请求必须来自允许的页面；读数据的请求浏览器本身就不让别的网站读到响应（没有 CORS 头）
+    if (req.method !== 'GET' && !originAllowed(req)) return sendJson(res, { error: '请求来源不允许' }, 403);
+    if (url.pathname === '/api/login') return handleLogin(req, res, url);
+    const auth = authenticate(req, url);
+    const need = url.pathname === '/api/sync' && req.method === 'POST' ? 'admin' : API_NEED[url.pathname] ?? 'control';
+    if (!hasRole(auth.role, need)) {
+      return auth.role
+        ? sendJson(res, { error: need === 'admin' ? '需要管理员权限' : '没有权限' }, 403)
+        : sendJson(res, { error: '未登录或登录已过期' }, 401);
+    }
+  }
+
+  // 导播台「本地浏览」：按需拉某个标的 / 周期的 K 线，不改导播状态、不推给直播画面
+  if (url.pathname === '/api/kline') {
+    const symbol = findSymbol(url.searchParams.get('symbol'));
+    const period = url.searchParams.get('period');
+    if (!symbol) return sendJson(res, { error: `未知标的 ${url.searchParams.get('symbol')}` });
+    if (!PERIODS.includes(period)) return sendJson(res, { error: `不支持的周期 ${period}` });
+    buildData(symbol, period)
+      .then((msg) => sendJson(res, msg))
+      .catch((err) => sendJson(res, { error: `${symbol.code}: ${err.message}` }));
+    return;
+  }
   if (url.pathname === '/api/search') {
     return sendJson(res, search(url.searchParams.get('q')));
   }
@@ -381,6 +494,18 @@ function handleHttp(req, res) {
       .then((r) => sendJson(res, r))
       .catch((err) => sendJson(res, { error: err.message }));
     return;
+  }
+  // 刷新数据：refresh = 重读本地数据；sync = 先从 tushare 同步再刷新（GET 查进度）
+  if (url.pathname === '/api/refresh' && req.method === 'POST') {
+    refreshAll();
+    return sendJson(res, { ok: true });
+  }
+  if (url.pathname === '/api/sync') {
+    if (req.method === 'POST') {
+      const started = startSync();
+      return sendJson(res, { ok: started, ...(!started && { error: '同步正在进行中' }), ...syncInfo() });
+    }
+    return sendJson(res, syncInfo());
   }
   if (url.pathname === '/api/health') {
     return sendJson(res, { ok: !lastError, state, ...statusMsg() });
@@ -405,6 +530,8 @@ state.watchlist = cleanWatchlist(state.watchlist);
 
 server.listen(PORT, HOST, () => {
   console.log(`[server] http://${HOST}:${PORT}  数据源=${adapterName}`);
+  console.log(`[auth] ${authSummary()}`);
+  if (!AUTH_ENABLED && HOST !== '127.0.0.1') console.warn('[auth] ⚠ 鉴权未开启，不要把这个端口暴露到公网');
   loadData();
   loadRank();
 });

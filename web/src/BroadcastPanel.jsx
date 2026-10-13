@@ -34,7 +34,7 @@ export default function BroadcastPanel({ data, state, status }) {
         <KChart
           data={data} view={state.view} main={state.main} sub={state.sub}
           params={state.settings.indicators} scale={scale} subHeight={Math.round(60 * scale)}
-          drawings={state.drawings?.[data.symbol.code]}
+          drawings={state.drawings?.[data.symbol.code]} lineWidth={state.settings.drawLine}
         />
       </div>
 

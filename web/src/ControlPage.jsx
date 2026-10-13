@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLive } from './useLive.js';
 import KChart from './KChart.jsx';
 import SymbolSearch from './SymbolSearch.jsx';
@@ -7,7 +7,7 @@ import RankBrowser from './RankBrowser.jsx';
 import MacroPage from './MacroPage.jsx';
 import { endIndexOf, minBarsFor, moveView, periodsFor, quoteOf, stepPeriod } from './view.js';
 import { MAIN, SUB } from './indicators.js';
-import { DRAW_TOOLS } from './drawTools.js';
+import { DRAW_TOOLS, dragDrawable } from './drawTools.js';
 import { isSymbolMasked, maskName } from '../../shared/settings.js';
 import './control.css';
 
@@ -27,6 +27,27 @@ const PAGES = [
 
 const DEFAULT_VIEW = { bars: 60, end: null };
 const ECHO_GUARD_MS = 1000; // 本机刚操作过，忽略服务端回传的旧视图，避免按住方向键时回跳
+
+/**
+ * 本地浏览：这些状态只改本机，不发给服务端，直播画面保持不变。
+ * 画线存在服务端（直播画面显示同一标的时会上屏），本地浏览时不允许改。
+ */
+const LOCAL_KEYS = ['symbol', 'period', 'view', 'main', 'sub', 'scene', 'rank', 'macro'];
+const BLOCKED_IN_LOCAL = ['drawPut', 'drawRemove', 'drawClear'];
+
+/** 本地浏览时合并一次修改，规则与服务端 applyPatch 一致（换标的/周期回到最新，换宏观图重置缩放和图例） */
+function applyLocal(cur, p) {
+  const next = { ...cur };
+  for (const k of ['symbol', 'period', 'main', 'sub', 'scene', 'view']) if (p[k] !== undefined) next[k] = p[k];
+  if (p.rank) next.rank = { ...cur.rank, ...p.rank };
+  if (p.macro) {
+    next.macro = p.macro.view && p.macro.view !== cur.macro.view
+      ? { view: p.macro.view, zoom: null, legend: null }
+      : { ...cur.macro, ...p.macro };
+  }
+  if (next.symbol !== cur.symbol || next.period !== cur.period) next.view = { ...next.view, end: null };
+  return next;
+}
 
 // 方向键 → 视图操作
 const VIEW_KEYS = {
@@ -68,12 +89,41 @@ function Seg({ items, value, onPick, disabled, allowNone }) {
   );
 }
 
+// 触屏为主的设备（iPad）：不显示底部的直播预览和快捷键说明，K 线区域占满剩余高度
+const TOUCH_QUERY = '(pointer: coarse)';
+function useTouchDevice() {
+  const [touch, setTouch] = useState(() => matchMedia(TOUCH_QUERY).matches);
+  useEffect(() => {
+    const mq = matchMedia(TOUCH_QUERY);
+    const onChange = () => setTouch(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return touch;
+}
+
 export default function ControlPage() {
-  const { state, data, status, connected, send } = useLive('control');
+  const { state: liveState, data: liveData, status, connected, send, auth, authError } = useLive('control');
+  // 本地浏览：local = 本机自己的标的/周期/视图/指标/页面等（null = 未开启），localData = 按需拉的 K 线
+  const [local, setLocal] = useState(null);
+  const [localData, setLocalData] = useState(null);
+  const [localError, setLocalError] = useState(null);
+  // 下面的界面统一用 state / data：本地浏览时是「服务端状态 + 本机覆盖」，否则就是服务端状态
+  const state = useMemo(() => (local && liveState ? { ...liveState, ...local } : liveState), [liveState, local]);
+  const data = local ? localData : liveData;
   const [view, setView] = useState(DEFAULT_VIEW);
   const [query, setQuery] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const touch = useTouchDevice();
+
+  // 导播台固定一屏：整页不滚动、iPad 上不回弹（只在导播台生效，渲染页另有设置）
+  useEffect(() => {
+    const els = [document.documentElement, document.body];
+    els.forEach((el) => { el.style.overflow = 'hidden'; el.style.overscrollBehavior = 'none'; });
+    return () => els.forEach((el) => { el.style.overflow = ''; el.style.overscrollBehavior = ''; });
+  }, []);
   const [drawTool, setDrawTool] = useState(null);       // 正在使用的画线工具 { name, text? }
+  const [moreTools, setMoreTools] = useState(false);    // 工具栏「更多」是否展开
   const [selectedDraw, setSelectedDraw] = useState(null); // 选中的画线 id（Delete 删除）
   // 导播台当前页 = 直播画面内容（服务端 scene），切页即切直播画面；多台导播机保持一致
   const tab = state?.scene ?? 'kline';
@@ -85,12 +135,54 @@ export default function ControlPage() {
   const periods = periodsFor(status);
   const render = state?.settings.render ?? { width: 966, height: 320 };
   const minBars = minBarsFor(render.width);
-  latest.current = { data, view, state, send, periods, minBars, settingsOpen, tab, drawTool, selectedDraw };
+  latest.current = { data, view, state, send, periods, minBars, settingsOpen, tab, drawTool, selectedDraw, local };
 
-  const set = (patch) => latest.current.send({ type: 'set', patch });
+  // 本地浏览时：LOCAL_KEYS 只改本机，画线操作丢弃，其余（自选、设置、画面开关）照常发给服务端
+  const set = (patch) => {
+    if (!latest.current.local) return latest.current.send({ type: 'set', patch });
+    const own = {}, rest = {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (LOCAL_KEYS.includes(k)) own[k] = v;
+      else if (!BLOCKED_IN_LOCAL.includes(k)) rest[k] = v;
+    }
+    if (Object.keys(own).length) setLocal((cur) => applyLocal(cur, own));
+    if (Object.keys(rest).length) latest.current.send({ type: 'set', patch: rest });
+  };
+  const toggleLocal = () => {
+    if (local) {
+      setLocal(null);
+      setLocalData(null);
+      if (liveState) setView(liveState.view); // 回到直播画面当前的视图
+      return;
+    }
+    if (!liveState) return;
+    setLocal(Object.fromEntries(LOCAL_KEYS.map((k) => [k, k === 'view' ? view : liveState[k]])));
+    setLocalData(liveData); // 先沿用当前数据，避免闪一下空白
+    setDrawTool(null);
+    setSelectedDraw(null);
+  };
+
+  // 本地浏览：标的 / 周期变化时拉 K 线；服务端刷新行情（updatedAt 变化）后也重拉
+  const localKey = local ? `${local.symbol}|${local.period}` : null;
+  useEffect(() => {
+    if (!localKey) return;
+    const [symbol, period] = localKey.split('|');
+    let stale = false;
+    fetch(`/api/kline?symbol=${encodeURIComponent(symbol)}&period=${period}`)
+      .then((r) => r.json())
+      .then((msg) => {
+        if (stale) return;
+        if (msg.error) setLocalError(msg.error);
+        else { setLocalError(null); setLocalData(msg); }
+      })
+      .catch((err) => !stale && setLocalError(err.message));
+    return () => { stale = true; };
+  }, [localKey, status?.updatedAt]);
   const goPage = (key) => set({ scene: key });
   // 宏观图悬停位置：高频、不落盘，服务端原样转发给直播画面
-  const sendHover = useCallback((view, index) => send({ type: 'hover', scope: 'macro', view, index }), [send]);
+  const sendHover = useCallback((view, index) => {
+    if (!latest.current.local) send({ type: 'hover', scope: 'macro', view, index }); // 本地浏览时不同步悬停
+  }, [send]);
 
   // 视图：本地先改（跟手），同时发给服务端广播到直播画面
   const applyView = (next) => {
@@ -164,7 +256,7 @@ export default function ControlPage() {
   const previewScale = Math.min(1, PREVIEW_MAX.width / render.width, PREVIEW_MAX.height / render.height);
   const loading = data && state && (data.symbol.code !== state.symbol || data.period !== state.period);
   const inWatch = !!state?.watchlist.some((x) => x.code === state.symbol);
-  const masked = data && isSymbolMasked(state, data.symbol);
+  const masked = !local && data && isSymbolMasked(state, data.symbol);
   // 当前图上标的的画线（按图表数据的标的取，切换标的加载中时不串线）
   const drawings = (data && state?.drawings?.[data.symbol.code]) ?? [];
 
@@ -182,6 +274,19 @@ export default function ControlPage() {
       latest: view.end == null,
     };
   }
+
+  // 正在用的工具在「更多」里时，收起会让它看不见，所以收起按钮在这种情况下不可用
+  const moreActive = DRAW_TOOLS.some((t) => t.more && t.key === drawTool?.name);
+  const moreButton = (
+    <button
+      key="more" className="more" title={moreTools ? '收起' : '更多画线工具'}
+      disabled={moreTools && moreActive}
+      onClick={() => setMoreTools((v) => !v)}
+    >
+      <span className="i">{moreTools ? '▴' : '▾'}</span>
+      <span className="l">{moreTools ? '收起' : '更多'}</span>
+    </button>
+  );
 
   return (
     <div className="term">
@@ -228,24 +333,43 @@ export default function ControlPage() {
           {state?.hideSymbol ? '◉ 隐藏个股：开' : '隐藏个股：关'}
         </button>
 
-        <div className="status">
-          <span className={`dot ${connected ? 'on' : ''}`} />
-          {connected ? '已连接' : '连接中…'}
-          {status && <> · 渲染端 {status.clients.render ?? 0} · {status.source}</>}
-          <button className="link" disabled={!ready} onClick={() => send({ type: 'refresh' })}>刷新行情</button>
-          <button disabled={!ready} onClick={() => setSettingsOpen(true)}>⚙ 设置</button>
-        </div>
+        <button
+          disabled={!ready}
+          className={`localmode ${local ? 'on' : ''}`}
+          title="开启后，切换标的、周期、缩放、指标、翻页都只在本机生效，直播画面保持不变"
+          onClick={toggleLocal}
+        >
+          {local ? '◉ 本地浏览：开' : '本地浏览：关'}
+        </button>
+
       </header>
 
       {settingsOpen && state && (
         <SettingsPanel
           settings={state.settings}
+          canSync={status?.source === 'local' && auth?.role === 'admin'}
           onClose={() => setSettingsOpen(false)}
           onSave={(settings) => { set({ settings }); setSettingsOpen(false); }}
         />
       )}
 
+      {authError && (
+        <div className="error">
+          {authError === 'origin'
+            ? '连接被拒绝：当前页面的来源不在允许列表里（服务端 ALLOWED_ORIGINS）'
+            : '未登录或登录已过期：请从围炉工作台重新打开导播台'}
+        </div>
+      )}
       {status?.error && <div className="error">行情拉取失败，画面保持上一份数据：{status.error}</div>}
+      {local && (
+        <div className="local-banner">
+          本地浏览中：这里的操作只在本机生效，不会同步到直播画面
+          {liveData && <>（直播画面仍是「{isSymbolMasked(liveState, liveData.symbol) ? maskName(liveData.symbol.name) : liveData.symbol.name}」）</>}
+          ；本地浏览时不能画线
+          {localError && <span className="err"> · 加载失败：{localError}</span>}
+          <button onClick={toggleLocal}>退出本地浏览</button>
+        </div>
+      )}
 
       {/* ---- K 线页工具栏 ---- */}
       {tab === 'kline' && (
@@ -278,6 +402,7 @@ export default function ControlPage() {
           <Seg items={MAIN} value={state?.main} disabled={!ready || data?.period === 'T'} allowNone onPick={(k) => set({ main: k })} />
           <span className="label">副图</span>
           <Seg items={SUB} value={state?.sub} disabled={!ready} allowNone onPick={(k) => set({ sub: k })} />
+          <button disabled={!ready} onClick={() => setSettingsOpen(true)}>⚙ 设置</button>
         </div>
       )}
 
@@ -310,14 +435,16 @@ export default function ControlPage() {
       )}
 
       <div className="body" style={tab === 'kline' ? undefined : { display: 'none' }}>
-        {/* 画线工具栏：点工具后在图上依次点击端点；画好的线同步到直播画面 */}
+        {/* 画线工具栏：点工具后在图上依次点击端点；画好的线同步到直播画面。不常用的收在「更多」里 */}
         <aside className="draw-bar">
-          {DRAW_TOOLS.map((t) => (
+          {DRAW_TOOLS.filter((t) => !t.more || moreTools).map((t, i, list) => (
+            <Fragment key={t.key}>
+            {t.more && !list[i - 1]?.more && moreButton}
             <button
               key={t.key}
               className={drawTool?.name === t.key ? 'active' : ''}
               title={t.label}
-              disabled={!data || data.period === 'T'}
+              disabled={!data || data.period === 'T' || !!local}
               onClick={() => {
                 if (drawTool?.name === t.key) { setDrawTool(null); return; }
                 if (t.key === 'simpleAnnotation') {
@@ -330,11 +457,13 @@ export default function ControlPage() {
               <span className="i">{t.icon}</span>
               <span className="l">{t.label}</span>
             </button>
+            </Fragment>
           ))}
+          {!moreTools && moreButton}
           <button
             className="clear"
             title="清除当前标的的全部画线"
-            disabled={!drawings.length}
+            disabled={!drawings.length || !!local}
             onClick={() => {
               if (window.confirm(`清除「${data.symbol.name}」的全部 ${drawings.length} 条画线？`)) {
                 set({ drawClear: data.symbol.code });
@@ -348,15 +477,21 @@ export default function ControlPage() {
         </aside>
 
         <main className={`chart ${drawTool ? 'drawing' : ''}`}>
-          {drawTool && <div className="draw-hint">正在画「{DRAW_TOOLS.find((t) => t.key === drawTool.name)?.label}」：在图上依次点击端点 · Esc 取消</div>}
+          {drawTool && <div className="draw-hint">正在画「{DRAW_TOOLS.find((t) => t.key === drawTool.name)?.label}」：{drawTool.name === 'brush' ? '按住拖动自由画线，可连续画多笔 · 再点「画笔」或 Esc 退出'
+            : dragDrawable(drawTool.name) ? '按住拖动画线，松手完成' : '在图上依次点击端点 · Esc 取消'}</div>}
           {data && state && (
             <KChart
               data={data} view={view} main={state.main} sub={state.sub} params={state.settings.indicators}
               terminal subHeight={140} minBars={minBars} onViewChange={applyView}
-              drawings={drawings} drawTool={drawTool}
-              onDrawEnd={(d) => { set({ drawPut: { symbol: latest.current.data.symbol.code, drawing: d } }); setDrawTool(null); }}
+              drawings={drawings} drawTool={drawTool} lineWidth={state.settings.drawLine}
+              onDrawEnd={(d) => {
+                set({ drawPut: { symbol: latest.current.data.symbol.code, drawing: d } });
+                if (d.name !== 'brush') setDrawTool(null); // 画笔连续画，不退出
+              }}
               onDrawChange={(d) => set({ drawPut: { symbol: latest.current.data.symbol.code, drawing: d } })}
               onDrawSelect={setSelectedDraw}
+              showDelete={touch && !local} readOnly={!!local}
+              onDrawDelete={(id) => { set({ drawRemove: { symbol: latest.current.data.symbol.code, id } }); setSelectedDraw(null); }}
             />
           )}
         </main>
@@ -384,7 +519,7 @@ export default function ControlPage() {
         </aside>
       </div>
 
-      <footer>
+      {!touch && <footer>
         <div className="preview" style={{ width: render.width * previewScale, height: render.height * previewScale }}>
           <iframe
             title="直播画面" src="/render?preview" width={render.width} height={render.height}
@@ -393,7 +528,7 @@ export default function ControlPage() {
         </div>
         <div className="side">
           <h3>直播画面 · {render.width}×{render.height}{previewScale < 1 && `（预览缩小到 ${Math.round(previewScale * 100)}%）`}</h3>
-          {range && tab === 'kline' && (
+          {range && tab === 'kline' && !local && (
             <p className="range">
               {range.text}
               <span className={range.latest ? 'tag latest' : 'tag'}>{range.latest ? '跟随最新' : '历史区间'}</span>
@@ -415,7 +550,7 @@ export default function ControlPage() {
           </dl>
           <p className="hint">vMix 浏览器源：<code>{location.origin}/render</code></p>
         </div>
-      </footer>
+      </footer>}
     </div>
   );
 }

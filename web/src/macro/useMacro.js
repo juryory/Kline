@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { withKey } from '../auth.js';
 
 // 宏观数据只在盘后同步时变化：同一页面内缓存 5 分钟，切换图表不重复请求
 const cache = new Map(); // ds -> { at, promise }
@@ -7,7 +8,7 @@ const TTL = 5 * 60_000;
 function fetchDataset(ds) {
   const hit = cache.get(ds);
   if (hit && Date.now() - hit.at < TTL) return hit.promise;
-  const promise = fetch(`/api/macro?ds=${ds}`).then((r) => r.json());
+  const promise = fetch(withKey(`/api/macro?ds=${ds}`)).then((r) => r.json());
   cache.set(ds, { at: Date.now(), promise });
   promise.catch(() => cache.delete(ds));
   return promise;

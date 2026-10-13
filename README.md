@@ -93,7 +93,30 @@ npm start                 # http://<直播机内网IP>:8787
 - 行情拉取失败时保留上一份数据，导播台顶部显示红色错误提示。
 - 分时目前只有假数据（mock）实现。`local` / `tushare` 数据源没有分时，导播台和直播画面会自动隐藏「分时」，回车最小到日K。接入分钟数据时在适配器里导出 `getIntraday` 即可。
 - 导播最后的选择保存在 `.runtime/state.json`，服务重启后自动恢复。
-- 只有 `role=control` 的连接能修改状态。内网没有鉴权，别把端口暴露到公网。
+- 只有 `role=control` 的连接能修改状态。默认不鉴权，只能在内网用；部署到服务器前见下面「鉴权」。
+
+## 鉴权（部署到服务器）
+
+登录由围炉工作台（[WeiLuApp](https://github.com/juryory/WeiLuApp)）负责，Kline 后端只校验工作台签发的 JWT。实现见 `server/auth.js`。
+
+```bash
+npm run token -- secret      # 生成 AUTH_SECRET / RENDER_KEY，填进 .env（AUTH_SECRET 与工作台一致）
+```
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `AUTH_SECRET` | JWT（HS256）签名密钥，与工作台一致。**不填 = 不鉴权**（内网模式） |
+| `RENDER_KEY` | 直播画面只读 key，vMix 地址填 `https://<域名>/render?key=<RENDER_KEY>` |
+| `AUTH_COOKIE` | 登录 Cookie 名，默认 `weilu_token`，与工作台一致 |
+| `ALLOWED_ORIGINS` | 允许的页面来源，逗号分隔；不填 = 只允许与服务同域名 |
+
+- 角色：`admin`（全部操作 + 触发数据同步）、`control`（导播台全部操作）、`render`（只读 key，只能接收画面数据）。
+- JWT payload：`{ sub, name, role: 'admin' | 'control', exp }`，`exp` 必填。凭证按顺序取 `Authorization: Bearer`、Cookie、`?token=`（仅调试）。
+- 导播台、预览、`/api/*` 需要登录；直播画面和 `/api/macro` 可用 `RENDER_KEY`；`POST /api/sync` 需要 `admin`。
+- WebSocket 和改数据的请求校验 Origin，防止别的网站借导播员浏览器里的登录态发指令。
+- 未登录 / 过期时 WebSocket 以 4401 关闭，导播台顶部提示重新登录；连接中 token 到期会被断开。
+- 推荐部署：工作台 `work.example.com`，Kline `kline.example.com`（宝塔反向代理到 8787，开启 HTTPS 和 WebSocket），工作台把 Cookie 写在 `.example.com` 上，两边共享登录态。
+- 调试：`npm run token`（导播，8 小时）或 `npm run token -- admin 24`，打开输出里的 `/api/login?token=…` 链接即可登录（写入 Cookie 后跳到导播台）。
 
 ## 接入 tushare（收盘数据）
 
@@ -119,6 +142,14 @@ npm start
 - 可重复运行、可中断续传；当天数据未发布时会跳过，下次自动补上。
 - 当天复权因子若还没发布，沿用前一天的因子，下次同步后自动修正。
 - 同步和直播可以同时进行（SQLite WAL 模式）；服务 5 分钟内会读到新数据，也可以在导播台点「刷新行情」。
+- 也可以通过接口触发（不用登录直播机）：
+  - `POST /api/sync`：后台跑一次 `npm run sync`，完成后自动重载标的池并刷新画面；正在同步时再调用会返回 `ok: false`
+  - `GET /api/sync`：同步进度（`running` / `exitCode` / 最近 200 行日志）
+  - `POST /api/refresh`：只重新读取本地库并刷新画面（等同「刷新行情」）
+
+  ```bash
+  curl -X POST http://<直播机内网IP>:8787/api/sync
+  ```
 
 ### 每天自动同步（Windows 计划任务）
 
@@ -126,7 +157,7 @@ npm start
 
 ```powershell
 schtasks /Create /TN "KlineSync" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 17:30 `
-  /TR "cmd /c cd /d C:\Users\LianXian01\Documents\GitHub\Kline && npm run sync >> data\sync.log 2>&1"
+  /TR "cmd /c cd /d <项目路径> && npm run sync >> data\sync.log 2>&1"
 ```
 
 ## 新增数据源

@@ -1,5 +1,5 @@
 /**
- * 导播台「设置」：指标参数 + 直播画面尺寸。服务端（校验、落盘）和前端（设置面板、画图）共用。
+ * 导播台「设置」：指标参数 + 直播画面尺寸 + 画线粗细。服务端（校验、落盘）和前端（设置面板、画图）共用。
  */
 
 /** 指标参数规格。list = 可增减的一组周期；fields = 固定个数的参数 */
@@ -27,6 +27,9 @@ export const INDICATOR_SPECS = {
 };
 
 export const RENDER_LIMITS = { width: { min: 320, max: 3840 }, height: { min: 160, max: 2160 } };
+/** 画线粗细（px，按直播画面基准尺寸；画面放大时按比例加粗） */
+export const DRAW_LINE_LIMITS = { min: 0.5, max: 6 };
+export const DRAW_LINE_PRESETS = [1, 1.5, 2, 3, 4];
 /** 直播画面的设计基准尺寸；尺寸变大时字号、线宽按比例放大 */
 export const BASE_SIZE = { width: 966, height: 320 };
 
@@ -41,7 +44,14 @@ export const DEFAULT_SETTINGS = {
     RSI: [6, 12, 24],
   },
   render: { ...BASE_SIZE },
+  drawLine: 1.5,
 };
+
+/** 画线粗细校验：不合法返回错误描述 */
+export function checkDrawLine(v) {
+  const { min, max } = DRAW_LINE_LIMITS;
+  return Number.isFinite(v) && v >= min && v <= max ? null : `${min}~${max} 之间的数`;
+}
 
 const inRange = (v, { min, max, step }) =>
   Number.isFinite(v) && v >= min && v <= max && (step ? true : Number.isInteger(v));
@@ -79,7 +89,13 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
     const { min, max } = RENDER_LIMITS[k];
     return Number.isFinite(v) && v >= min && v <= max ? v : fallback.render[k];
   };
-  return { indicators, render: { width: size('width'), height: size('height') } };
+  const drawLine = Number(raw?.drawLine);
+  return {
+    indicators,
+    render: { width: size('width'), height: size('height') },
+    // 旧版本的设置里没有这一项：用默认值
+    drawLine: checkDrawLine(drawLine) ? fallback.drawLine ?? DEFAULT_SETTINGS.drawLine : Math.round(drawLine * 10) / 10,
+  };
 }
 
 /**
