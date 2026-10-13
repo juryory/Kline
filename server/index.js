@@ -3,7 +3,7 @@
  *
  * WebSocket /ws?role=render|control|preview
  *   连接时校验身份（见 server/auth.js）：render 需要 RENDER_KEY 或登录，control / preview 需要登录（导播或管理员）。
- *   不通过时以 4401（未登录 / 已过期）或 4403（来源不允许）关闭连接。
+ *   不通过时以 4401（未登录 / 已过期）或 4403（来源不允许）关闭连接；连接中 token 到期以 4001 关闭（客户端立即重连）。
  *
  *   服务端 → 客户端
  *     { type: 'auth',   role, user, renderKey }        本连接的身份（连接后第一条）；renderKey 只发给已登录的导播 / 管理员
@@ -408,7 +408,8 @@ wss.on('connection', (ws, req) => {
 setInterval(() => {
   const now = Date.now() / 1000;
   for (const ws of wss.clients) {
-    if (ws.auth?.exp && ws.auth.exp <= now) { ws.close(4401, 'token expired'); continue; }
+    // 4001：本连接的 token 到期。工作台会定时续期 Cookie，客户端立刻重连就能用新 token 接上；真没登录时重连会收到 4401
+    if (ws.auth?.exp && ws.auth.exp <= now) { ws.close(4001, 'token expired'); continue; }
     if (!ws.alive) { ws.terminate(); continue; }
     ws.alive = false;
     ws.ping();

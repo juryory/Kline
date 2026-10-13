@@ -42,7 +42,9 @@ export function useLive(role) {
         // 4401 未登录 / 已过期，4403 来源不允许：重连也没用，放慢重试（重新登录后会自动连上）
         const denied = e.code === 4401 ? 'unauthorized' : e.code === 4403 ? 'origin' : null;
         if (denied) setAuthError(denied);
-        if (!closed) timer = setTimeout(connect, denied ? 10_000 : Math.min(500 * 2 ** retry++, 5000));
+        // 4001 连接中 token 到期：工作台已续期 Cookie，马上重连（重连仍失败会收到 4401）
+        const delay = denied ? 10_000 : e.code === 4001 ? 0 : Math.min(500 * 2 ** retry++, 5000);
+        if (!closed) timer = setTimeout(connect, delay);
       };
     };
 
