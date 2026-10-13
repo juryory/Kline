@@ -15,16 +15,16 @@
     "node": ">=22.13"
   },
   "dependencies": {
-    "echarts": "^6.1.0",
-    "klinecharts": "^9.8.12",
     "pinyin-pro": "^3.29.4",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "echarts": "^6.1.0",
+    "klinecharts": "^9.8.12",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "vite": "^8.3.1"
   }
 }

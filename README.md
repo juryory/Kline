@@ -118,6 +118,42 @@ npm run token -- secret      # 生成 AUTH_SECRET / RENDER_KEY，填进 .env（A
 - 推荐部署：工作台 `work.example.com`，Kline `kline.example.com`（宝塔反向代理到 8787，开启 HTTPS 和 WebSocket），工作台把 Cookie 写在 `.example.com` 上，两边共享登录态。
 - 调试：`npm run token`（导播，8 小时）或 `npm run token -- admin 24`，打开输出里的 `/api/login?token=…` 链接即可登录（写入 Cookie 后跳到导播台）。
 
+## Docker 部署
+
+一个服务一个容器：镜像里是后端 + 打包好的导播台 / 直播画面，数据在数据卷 `/data`，配置全走环境变量（镜像里没有 `.env` 和密钥）。
+
+```bash
+docker compose build
+cp .env.docker.example .env.docker                  # 填 TUSHARE_TOKEN / AUTH_SECRET / RENDER_KEY / ALLOWED_ORIGINS
+docker run --rm kline:latest npm run token -- secret  # 生成 AUTH_SECRET / RENDER_KEY
+docker compose up -d
+docker compose exec kline npm run sync              # 首次建库（约半小时）
+```
+
+- **时区**：镜像固定 `TZ=Asia/Shanghai`，不要改。交易日 → 时间戳、周K / 月K 聚合、同步判断「今天」都按本地时区，UTC 下周K 会错位。
+- **数据卷** `kline-data:/data`：`market.db`（行情库，含 `-wal` / `-shm`）和 `runtime/state.json`（导播状态：设置、自选、画线）。重建容器不丢。
+  - 已有本地库可以直接拷进去，省掉首次同步：先停服务 `docker compose stop`，再 `docker compose cp data/market.db kline:/data/market.db`，然后 `docker compose start`。
+  - 改用宿主机目录（如 `./kline-data:/data`）时，容器以 `node` 用户（uid 1000）运行，需要先 `chown -R 1000:1000 ./kline-data`。
+- **每日同步**：`.env.docker` 里 `SYNC_AT=17:30`、`SYNC_DAYS=1-5`，到点后台自动跑（同 `POST /api/sync`），不需要宿主机计划任务。也可以手动 `docker compose exec kline npm run sync`。
+- **健康检查**：`GET /healthz`（不需要登录），镜像已配 `HEALTHCHECK`。
+- **只能跑一个实例**：导播状态和行情缓存在进程内存里，不要开多个副本。
+- **端口**只绑定 `127.0.0.1:8787`，由宝塔 Nginx 反向代理对外。宝塔给 `kline.example.com` 开 HTTPS，反向代理到 `http://127.0.0.1:8787`，配置里要有 WebSocket 和转发头：
+
+  ```nginx
+  location / {
+      proxy_pass http://127.0.0.1:8787;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Host $host;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_read_timeout 1h;   # WebSocket 长连接
+  }
+  ```
+
+- 调试 token：`docker compose exec kline npm run token -- admin 24`。
+
 ## 接入 tushare（收盘数据）
 
 直播时只读本机的 SQLite 库，不访问公网；tushare 只在盘后同步时调用。
@@ -151,7 +187,11 @@ npm start
   curl -X POST http://<直播机内网IP>:8787/api/sync
   ```
 
-### 每天自动同步（Windows 计划任务）
+### 每天自动同步
+
+后端内置定时同步：`.env` 里设 `SYNC_AT=17:30`（可多个，逗号分隔）、`SYNC_DAYS=1-5`，服务运行时到点自动跑。Docker 部署用这个。
+
+#### 或者用 Windows 计划任务
 
 用管理员 PowerShell 执行一次，工作日 17:30 自动同步，日志写到 `data\sync.log`：
 

@@ -450,6 +450,9 @@ function handleLogin(req, res, url) {
 function handleHttp(req, res) {
   const url = new URL(req.url, 'http://x');
 
+  // 健康检查（Docker HEALTHCHECK / 宝塔监控）：不需要登录，只回答进程是否在服务
+  if (url.pathname === '/healthz') return sendJson(res, { ok: true });
+
   if (url.pathname.startsWith('/api/')) {
     // 改数据的请求必须来自允许的页面；读数据的请求浏览器本身就不让别的网站读到响应（没有 CORS 头）
     if (req.method !== 'GET' && !originAllowed(req)) return sendJson(res, { error: '请求来源不允许' }, 403);
@@ -540,3 +543,31 @@ setInterval(() => { if (state.period !== 'T') loadData({ force: true }); loadRan
 // 定期重新载入标的池：盘后同步新增的股票 / 同花顺概念不用重启服务就能检索到
 setInterval(() => loadUniverse(adapter), +(process.env.UNIVERSE_REFRESH_MS || 30 * 60_000));
 setInterval(() => { if (state.period === 'T') loadData({ force: true }); }, INTRADAY_REFRESH_MS);
+
+/**
+ * 每日自动同步（容器里没有计划任务时用）：SYNC_AT=17:30（可多个，逗号分隔），
+ * SYNC_DAYS=1-5（周一到周五，0/7 = 周日；也可写 1,3,5）。按容器时区（TZ）计时，不填 SYNC_AT 不启用
+ */
+const SYNC_AT = (process.env.SYNC_AT || '').split(',').map((s) => s.trim()).filter((s) => /^\d{1,2}:\d{2}$/.test(s))
+  .map((s) => s.split(':').map(Number).map((n) => String(n).padStart(2, '0')).join(':'));
+function parseDays(spec = '1-5') {
+  const days = new Set();
+  for (const part of spec.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [a, b = a] = part.split('-').map(Number);
+    for (let d = a; d <= b; d++) days.add(d % 7);
+  }
+  return days;
+}
+const SYNC_DAYS = parseDays(process.env.SYNC_DAYS || '1-5');
+if (SYNC_AT.length) {
+  const done = new Set(); // 已触发过的「日期 时刻」，同一分钟内不重复
+  console.log(`[sync] 每日自动同步：${SYNC_AT.join(', ')}，星期 ${[...SYNC_DAYS].sort().join(',')}`);
+  setInterval(() => {
+    const now = new Date();
+    const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const key = `${now.toDateString()} ${hm}`;
+    if (!SYNC_AT.includes(hm) || !SYNC_DAYS.has(now.getDay()) || done.has(key)) return;
+    done.add(key);
+    console.log(`[sync] 定时同步 ${hm}${startSync() ? '' : '：上一次同步还没结束，跳过'}`);
+  }, 20_000);
+}

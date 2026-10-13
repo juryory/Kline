@@ -1,0 +1,30 @@
+# Kline 部署示例（宝塔：Docker → Compose，或命令行 docker compose up -d）
+#
+# 1. docker compose build；cp .env.docker.example .env.docker，填好 TUSHARE_TOKEN / AUTH_SECRET / RENDER_KEY / ALLOWED_ORIGINS
+#    （AUTH_SECRET / RENDER_KEY 可用 docker run --rm kline:latest npm run token -- secret 生成）
+# 2. docker compose up -d
+# 3. 首次没有行情库：docker compose exec kline npm run sync（约半小时），或把已有的 data/market.db 拷进数据卷
+# 4. 宝塔给 kline.example.com 配 HTTPS + 反向代理到 http://127.0.0.1:8787（开启 WebSocket），见 README「Docker 部署」
+
+services:
+  kline:
+    build: .
+    image: kline:latest
+    container_name: kline
+    restart: unless-stopped
+    env_file: .env.docker
+    environment:
+      # 这几项和镜像目录结构绑定，固定在这里，不受 env 文件影响
+      TZ: Asia/Shanghai
+      HOST: 0.0.0.0
+      PORT: 8787
+      DB_PATH: /data/market.db
+      STATE_FILE: /data/runtime/state.json
+    # 只绑定本机，由宝塔的 Nginx 反向代理对外，不直接暴露到公网
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - kline-data:/data
+
+volumes:
+  kline-data:
