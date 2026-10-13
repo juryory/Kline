@@ -14,7 +14,7 @@ export default function MacroPanel({ state, hover }) {
     <div className="panel macro" style={{ '--s': scale }}>
       <MacroView viewKey={view} scale={scale} zoom={zoom} legend={legend} hoverIndex={hoverIndex} />
       <div className="foot">
-        <b>围炉财经 · 投资的日常</b>
+        <b>围炉财经 · 数据中台</b>
       </div>
     </div>
   );

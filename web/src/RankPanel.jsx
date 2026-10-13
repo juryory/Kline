@@ -41,7 +41,7 @@ export default function RankPanel({ rank, state }) {
       </div>
 
       <div className="foot">
-        <b>围炉财经 · 投资的日常</b>
+        <b>围炉财经 · 数据中台</b>
       </div>
     </div>
   );
