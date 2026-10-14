@@ -58,10 +58,13 @@ export function indicatorCreate(key, params) {
 }
 
 /**
- * 分时图主图指标：均价线（服务端算好放在 bar.avg，只有个股有）+ 昨收虚线，
- * 另有两条透明线把纵轴撑成以昨收为中心上下对称（与同花顺一致，涨跌幅度一眼可比）。
- * extendData = 昨收
+ * 分时图主图指标（extendData = 昨收）：
+ *   均价线：bar.avg，只有个股有
+ *   领先指标（黄线）+ 红绿柱：bar.lead / bar.up / bar.down，只有大盘指数有（服务端盘后算好，见 server/breadth.js）
+ *     红绿柱从昨收线往上（红，上涨家数多）/ 往下（绿）画，长度 = 涨跌家数差，按当天最大值缩放到半个纵轴
+ *   昨收虚线；两条透明线把纵轴撑成以昨收为中心上下对称（与同花顺一致，涨跌幅度一眼可比）
  */
+const LEAD_COLOR = '#f0b90b';
 const TRANSPARENT = 'rgba(0,0,0,0)';
 registerIndicator({
   name: 'TIMELINE',
@@ -69,27 +72,57 @@ registerIndicator({
   precision: 2,
   figures: [
     { key: 'avg', title: '均价 ', type: 'line', styles: () => ({ color: COLORS.lines[0] }) },
+    { key: 'lead', title: '领先 ', type: 'line', styles: () => ({ color: LEAD_COLOR }) },
     { key: 'pc', title: '', type: 'line', styles: () => ({ color: 'rgba(232,232,236,0.35)', style: 'dashed', dashedValue: [4, 4] }) },
     { key: 'hi', title: '', type: 'line', styles: () => ({ color: TRANSPARENT }) },
     { key: 'lo', title: '', type: 'line', styles: () => ({ color: TRANSPARENT }) },
   ],
   calc: (list, indicator) => {
     const pc = indicator.extendData;
-    if (!Number.isFinite(pc)) return list.map((k) => ({ avg: k.avg }));
-    let dev = 0;
+    if (!Number.isFinite(pc)) return list.map((k) => ({ avg: k.avg, lead: k.lead }));
+    let dev = 0, maxAdv = 0;
     for (const k of list) {
       dev = Math.max(dev, Math.abs(k.high - pc), Math.abs(k.low - pc));
       if (k.avg != null) dev = Math.max(dev, Math.abs(k.avg - pc));
+      if (k.lead != null) dev = Math.max(dev, Math.abs(k.lead - pc));
+      if (k.up != null) maxAdv = Math.max(maxAdv, Math.abs(k.up - k.down));
     }
     dev = dev * 1.08 || pc * 0.01; // 留一点边；全天不动时按 ±1%
-    return list.map((k) => ({ avg: k.avg, pc, hi: pc + dev, lo: pc - dev }));
+    return list.map((k) => ({
+      avg: k.avg, lead: k.lead, pc, hi: pc + dev, lo: pc - dev,
+      // 红绿柱的顶端（价格坐标）
+      ...(k.up != null && maxAdv > 0 && { bar: pc + ((k.up - k.down) / maxAdv) * dev * 0.5 }),
+    }));
   },
-  // 图内左上角：均价（个股）+ 当前点相对昨收的涨跌幅
+  // 红绿柱：自己画细竖线（KLineChart 的柱子只能从固定值起画），返回 false 让上面的线照常画
+  draw: ({ ctx, indicator, visibleRange, xAxis, yAxis }) => {
+    const pc = indicator.extendData;
+    if (!Number.isFinite(pc)) return false;
+    const y0 = yAxis.convertToPixel(pc);
+    ctx.lineWidth = 1;
+    for (let i = visibleRange.from; i < visibleRange.to; i++) {
+      const v = indicator.result[i]?.bar;
+      if (v == null || v === pc) continue;
+      const x = Math.round(xAxis.convertToPixel(i)) + 0.5;
+      ctx.strokeStyle = v > pc ? COLORS.up : COLORS.down;
+      ctx.beginPath();
+      ctx.moveTo(x, y0);
+      ctx.lineTo(x, yAxis.convertToPixel(v));
+      ctx.stroke();
+    }
+    return false;
+  },
+  // 图内左上角：均价（个股）/ 领先指标和涨跌家数（大盘）+ 当前点相对昨收的涨跌幅
   createTooltipDataSource: ({ kLineDataList, crosshair, indicator }) => {
     const k = kLineDataList[crosshair?.dataIndex] ?? kLineDataList.at(-1);
     const pc = indicator.extendData;
     const values = [];
     if (k?.avg != null) values.push({ title: '均价 ', value: { text: k.avg.toFixed(2), color: COLORS.lines[0] } });
+    if (k?.lead != null) values.push({ title: '领先 ', value: { text: k.lead.toFixed(2), color: LEAD_COLOR } });
+    if (k?.up != null) {
+      values.push({ title: '涨 ', value: { text: String(k.up), color: COLORS.up } });
+      values.push({ title: '跌 ', value: { text: String(k.down), color: COLORS.down } });
+    }
     if (k && Number.isFinite(pc) && pc) {
       const pct = (k.close / pc - 1) * 100;
       values.push({

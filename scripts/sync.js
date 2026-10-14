@@ -12,6 +12,7 @@
  * - 板块排名（最近 20 个交易日）：涨停 limit_list_d、个股资金流 moneyflow、同花顺概念资金流 moneyflow_cnt_ths；
  *   成分股 index_member_all / ths_member 每周刷新一次
  * - 宏观数据：Shibor / LPR / 美债收益率 / GDP / CPI / PPI / 货币供应量 / 社融 / PMI / 两融，见 shared/macro.js
+ * - 大盘分时的领先指标 / 红绿柱：最近交易日全市场个股 1 分钟线（stk_mins，需历史分钟权限），见 server/breadth.js
  *
  * 范围：个股 SYNC_YEARS 年（默认 3）；板块和指数 BOARD_YEARS（默认 all = 全部历史）
  *
@@ -22,6 +23,7 @@ import { query, queryAll, queryPage, ymd, ymdToTs } from '../server/tushare-clie
 import { openDb, tx, DB_PATH } from '../server/db.js';
 import { BUILTIN_INDICES } from '../server/symbols.js';
 import { MACRO_DATASETS } from '../shared/macro.js';
+import { syncBreadth } from '../server/breadth.js';
 
 // 个股（日线 + 复权因子）同步年数
 const YEARS = +(process.env.SYNC_YEARS || 3);
@@ -431,6 +433,14 @@ console.log(`[sync] 宏观数据：${macroResults.join(' · ')}`);
 const keys = Object.keys(MACRO_DATASETS);
 const dropped = db.prepare(`DELETE FROM macro WHERE dataset NOT IN (${keys.map(() => '?').join(',')})`).run(...keys).changes;
 if (dropped) console.log(`[sync] 已清理下线的宏观数据 ${dropped} 条`);
+
+// 大盘分时的领先指标 / 红绿柱：放在最后，几千次分钟线请求，不影响前面日线、排名数据的及时性
+try {
+  if (tradeDays.length >= 2 && !(await syncBreadth({ db, call, day: tradeDays.at(-1), prevDay: tradeDays.at(-2) }))) failed = true;
+} catch (err) {
+  console.warn(`[breadth] 失败：${err.message}`);
+  failed = true;
+}
 
 const n = db.prepare('SELECT COUNT(*) AS n FROM daily').get().n;
 console.log(`[sync] 完成，日线共 ${n} 条，用时 ${Math.round((Date.now() - t0) / 1000)}s${failed ? '（有部分失败，见上方）' : ''}`);

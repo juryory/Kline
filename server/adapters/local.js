@@ -4,6 +4,7 @@ import { openDb } from '../db.js';
 import { ymdToTs } from '../tushare-client.js';
 import { computeRanking } from '../rank.js';
 import { MINUTES_ENABLED, readMinutes, toBar, intradayBars } from '../minutes.js';
+import { attachBreadth } from '../breadth.js';
 
 export const label = 'Tushare';
 
@@ -92,7 +93,9 @@ async function getIntradayImpl(symbol) {
   const ymd = last.getFullYear() * 10000 + (last.getMonth() + 1) * 100 + last.getDate();
   const bars = intradayBars(rows.filter((r) => r.ts >= dayStart), symbol);
   const prev = getDb().prepare('SELECT close FROM daily WHERE code = ? AND date < ? ORDER BY date DESC LIMIT 1').get(symbol.code, ymd);
-  return { prevClose: prev?.close ?? bars[0].open, bars };
+  const prevClose = prev?.close ?? bars[0].open;
+  // 大盘指数：补上领先指标 / 涨跌家数（盘后算好的，见 server/breadth.js）
+  return { prevClose, bars: attachBreadth(getDb(), symbol, bars, prevClose) };
 }
 
 export const getMinutes = MINUTES_ENABLED ? getMinutesImpl : undefined;

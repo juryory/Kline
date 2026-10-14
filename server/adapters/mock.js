@@ -1,5 +1,7 @@
 // 假数据：按标的代码做种子，每次启动走势一致；最后一根收盘价 = symbol.mock.endClose
 
+import { BREADTH_INDEX } from '../breadth.js';
+
 export const label = '示例数据';
 
 function mulberry32(seed) {
@@ -86,6 +88,16 @@ export async function getIntraday(symbol) {
       volume, turnover: volume * close,
     };
   });
+  // 大盘指数：假的领先指标（围绕指数走、偏离逐渐放大）和涨跌家数，形态同 server/breadth.js
+  if (BREADTH_INDEX[symbol.code]) {
+    let drift = 0;
+    bars.forEach((b, i) => {
+      drift += (rand() - 0.55) * prevClose * 0.0004;
+      b.lead = r2(b.close + drift);
+      const adv = Math.round(((b.close - (bars[i - 1]?.close ?? b.open)) / prevClose) * 400000 + (rand() - 0.5) * 300);
+      b.up = 1200 + adv; b.down = 1200 - adv;
+    });
+  }
   // 均价只给个股（同 server/minutes.js intradayBars）；假数据的 volume 是股、turnover = volume × 价格
   if (symbol.type === 'stock') {
     let amount = 0, vol = 0;
