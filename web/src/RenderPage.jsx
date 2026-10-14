@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLive } from './useLive.js';
+import { contentSize, safeAreaFill } from '../../shared/settings.js';
 import { renderUrl } from './auth.js';
 import BroadcastPanel from './BroadcastPanel.jsx';
 import RankPanel from './RankPanel.jsx';
@@ -25,15 +26,22 @@ export default function RenderPage({ preview }) {
 
   if (!state) return null;
   const { width, height } = state.settings.render;
+  const safe = state.settings.safeArea;
+  // 两侧安全区外（直播时容易被裁掉）：只铺底色，内容放在中间
+  const side = safe?.side ? <div style={{ width: safe.side, height, flex: 'none', background: safeAreaFill(safe) }} /> : null;
 
   // 导播"隐藏"时渐隐；导播台预览里保留半透明
   const opacity = state.visible ? 1 : preview ? 0.35 : 0;
 
   return (
-    <div style={{ width, height, opacity, transition: 'opacity 400ms ease' }}>
-      {state.scene === 'rank' ? rank && <RankPanel rank={rank} state={state} />
-        : state.scene === 'macro' ? <MacroPanel state={state} hover={hover} />
-          : data && <BroadcastPanel data={data} state={state} status={status} />}
+    <div style={{ width, height, opacity, transition: 'opacity 400ms ease', display: 'flex' }}>
+      {side}
+      <div style={{ width: contentSize(state.settings).width, height, flex: 'none' }}>
+        {state.scene === 'rank' ? rank && <RankPanel rank={rank} state={state} />
+          : state.scene === 'macro' ? <MacroPanel state={state} hover={hover} />
+            : data && <BroadcastPanel data={data} state={state} status={status} />}
+      </div>
+      {side}
     </div>
   );
 }

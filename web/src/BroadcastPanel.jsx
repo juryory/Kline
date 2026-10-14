@@ -1,6 +1,6 @@
 import KChart from './KChart.jsx';
-import { periodsFor, quoteOf } from './view.js';
-import { renderScale, isSymbolMasked, maskName } from '../../shared/settings.js';
+import { periodsFor, quoteOf, PRIMARY_PERIODS } from './view.js';
+import { contentSize, renderScale, isSymbolMasked, maskName } from '../../shared/settings.js';
 import './panel.css';
 
 /**
@@ -10,7 +10,7 @@ import './panel.css';
  */
 export default function BroadcastPanel({ data, state, status }) {
   const q = quoteOf(data);
-  const scale = renderScale(state.settings.render);
+  const scale = renderScale(contentSize(state.settings)); // 两侧安全区外不放内容
   // 直播合规：个股名称打码、代码不显示；真实名称和代码不进 DOM（不只是视觉隐藏）
   const masked = isSymbolMasked(state, data.symbol);
 
@@ -24,7 +24,8 @@ export default function BroadcastPanel({ data, state, status }) {
           <span className={`pct ${q.trend}`}>{q.pct}</span>
         </div>
         <div className="periods">
-          {periodsFor(status).map((p) => (
+          {/* 周期太多放不下：只显示常用的几个 + 当前周期 */}
+          {periodsFor(status, data.symbol).filter((p) => PRIMARY_PERIODS.includes(p.key) || p.key === data.period).map((p) => (
             <span key={p.key} className={p.key === data.period ? 'active' : ''}>{p.label}</span>
           ))}
         </div>

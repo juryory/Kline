@@ -60,6 +60,18 @@ const SCHEMA = `
     dataset TEXT, period TEXT, data TEXT,
     PRIMARY KEY (dataset, period)
   ) WITHOUT ROWID;
+  -- ======== 分钟 K（tushare stk_mins / idx_mins，按需拉取，只保留最近 MINUTE_MONTHS 个月） ========
+  -- freq = 1 / 5 / 15 / 30 / 60；ts = 该根 K 线结束时刻（毫秒）；价格不复权，vol 单位：股，amount 单位：元
+  CREATE TABLE IF NOT EXISTS minute (
+    code TEXT, freq INTEGER, ts INTEGER,
+    open REAL, high REAL, low REAL, close REAL, vol REAL, amount REAL,
+    PRIMARY KEY (code, freq, ts)
+  ) WITHOUT ROWID;
+  -- 每个标的 + 频率上次从 tushare 拉取的时间，避免每次打开都请求
+  CREATE TABLE IF NOT EXISTS minute_fetch (
+    code TEXT, freq INTEGER, fetched_at INTEGER, last_ts INTEGER,
+    PRIMARY KEY (code, freq)
+  ) WITHOUT ROWID;
   -- 杂项：如成分股上次刷新时间
   CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY, value TEXT

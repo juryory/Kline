@@ -1,5 +1,5 @@
 import MacroView from './macro/MacroView.jsx';
-import { renderScale } from '../../shared/settings.js';
+import { contentSize, renderScale } from '../../shared/settings.js';
 import './panel.css';
 
 /**
@@ -7,7 +7,7 @@ import './panel.css';
  * 导播台鼠标悬停的数据点（hover）在这里显示同样的提示框。
  */
 export default function MacroPanel({ state, hover }) {
-  const scale = renderScale(state.settings.render);
+  const scale = renderScale(contentSize(state.settings)); // 两侧安全区外不放内容
   const { view, zoom, legend } = state.macro;
   const hoverIndex = hover?.scope === 'macro' && hover.view === view ? hover.index : null;
   return (

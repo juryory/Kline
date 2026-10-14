@@ -41,6 +41,9 @@
 .term .quote .loading { color: #e0b050; }
 .term .quote .asof { color: var(--muted); font-size: 12px; }
 .term .seg { display: flex; gap: 4px; }
+.term .seg.periods { gap: 4px; }
+.term .seg.periods .fold { padding: 4px 8px; color: var(--muted); font-weight: 700; }
+.term .seg.periods .fold:hover { color: #e8e8ec; }
 .term .onair { font-weight: 600; min-width: 120px; }
 .term .onair.live { background: #1f7a3d; border-color: #1f7a3d; }
 .term .localmode.on { background: #1d3f6e; border-color: #3b7ddd; color: #cfe2ff; }
@@ -255,6 +258,13 @@
 .term .modal .chip button:hover { color: #ff8a8a; }
 .term .modal button.add { padding: 4px 10px; font-size: 12px; }
 .term .modal .line-sample { margin-left: 6px; }
+.term .modal input.color { width: 36px; height: 26px; padding: 1px 2px; cursor: pointer; }
+.term .modal .safe-sample {
+  display: inline-flex; width: 96px; height: 22px; margin-left: 6px; border: 1px solid #33333d; border-radius: 3px; overflow: hidden;
+  background: repeating-conic-gradient(#2a2a32 0 25%, #1c1c22 0 50%) 0 0 / 8px 8px; /* 棋盘格：看得出透明 */
+}
+.term .modal .safe-sample i { width: 14px; }
+.term .modal .safe-sample b { flex: 1; background: #140709; border-top: 2px solid #c8161d; }
 .term .modal .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .term .modal footer { display: flex; gap: 10px; margin-top: 20px; padding: 0; border: none; }
 .term .modal footer .spacer { flex: 1; }

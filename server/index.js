@@ -25,7 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import adapter, { adapterName } from './adapters/index.js';
 import { findSymbol, defaultSymbol, loadUniverse, search, publicSymbol } from './symbols.js';
-import { getDaily, getIntraday, aggregate } from './market.js';
+import { getDaily, getIntraday, getMinutes, aggregate } from './market.js';
+import { periodsFor, findPeriod } from '../shared/periods.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows, clearRankingCache } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
@@ -41,9 +42,13 @@ const PORT = +(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const REFRESH_MS = +(process.env.REFRESH_MS || 5 * 60_000);
 const INTRADAY_REFRESH_MS = +(process.env.INTRADAY_REFRESH_MS || 30_000);
-// T = 分时，只有数据源实现了 getIntraday 才开放（本地库只有日线）
+// T = 分时、m5～m60 = 分钟 K：数据源实现了 getIntraday / getMinutes 才开放（见 shared/periods.js）
 const HAS_INTRADAY = typeof adapter.getIntraday === 'function';
-const PERIODS = HAS_INTRADAY ? ['T', 'D', 'W', 'M'] : ['D', 'W', 'M'];
+const HAS_MINUTES = typeof adapter.getMinutes === 'function';
+const CAPS = { intraday: HAS_INTRADAY, minutes: HAS_MINUTES };
+const PERIODS = periodsFor(CAPS).map((p) => p.key);
+/** 某个标的可用的周期：板块没有分钟数据，不开放分时 / 分钟 K */
+const periodOk = (period, symbol) => periodsFor(CAPS, symbol).some((p) => p.key === period);
 // 可选指标，与 web/src/indicators.js 一致；null = 不显示
 const MAIN_INDICATORS = ['MA', 'EMA', 'BOLL', 'SAR'];
 const SUB_INDICATORS = ['VOL', 'AMT', 'MACD', 'KDJ', 'RSI'];
@@ -185,7 +190,14 @@ let loadSeq = 0;
 async function buildData(symbol, period, { force = false } = {}) {
   // quote = 页头的当日行情（最新价 + 昨收），不随周K/月K 变成周/月涨跌
   let bars, prevClose, quote;
-  if (period === 'T') {
+  const kind = findPeriod(period)?.kind;
+  if (kind === 'minute') {
+    // 分钟 K：页头仍显示当日涨跌（取日线）
+    const [minutes, daily] = await Promise.all([getMinutes(symbol, findPeriod(period).freq, { force }), getDaily(symbol)]);
+    bars = minutes;
+    const last = daily.at(-1);
+    quote = { close: minutes.at(-1).close, prevClose: daily.at(-2)?.close ?? last.open, date: minutes.at(-1).timestamp };
+  } else if (period === 'T') {
     ({ bars, prevClose } = await getIntraday(symbol, { force }));
     quote = { close: bars.at(-1).close, prevClose, date: bars.at(-1).timestamp };
   } else {
@@ -293,6 +305,8 @@ function applyPatch(patch = {}) {
   if (patch.watchRemove !== undefined) next.watchlist = state.watchlist.filter((x) => x.code !== patch.watchRemove);
   if (patch.watchlist !== undefined) next.watchlist = cleanWatchlist(patch.watchlist);
 
+  // 换到没有分钟数据的标的（板块）时，分时 / 分钟 K 自动退回日 K
+  if (!periodOk(next.period, findSymbol(next.symbol))) next.period = 'D';
   const needData = next.symbol !== state.symbol || next.period !== state.period;
   if (needData) next.view = { ...next.view, end: null }; // 换标的/周期后回到最新
   if (JSON.stringify(next) === JSON.stringify(state)) return;
@@ -319,7 +333,7 @@ function statusMsg() {
   for (const ws of wss.clients) clients[ws.role] = (clients[ws.role] || 0) + 1;
   return {
     type: 'status', error: lastError, clients, updatedAt: current?.updatedAt ?? null,
-    source: adapterName, intraday: HAS_INTRADAY, rank: HAS_RANK, macro: HAS_MACRO,
+    source: adapterName, intraday: HAS_INTRADAY, minutes: HAS_MINUTES, rank: HAS_RANK, macro: HAS_MACRO,
     syncing: isSyncing(), syncedAt: lastSyncAt(),
   };
 }
@@ -439,6 +453,7 @@ function handleHttp(req, res) {
     const period = url.searchParams.get('period');
     if (!symbol) return sendJson(res, { error: `未知标的 ${url.searchParams.get('symbol')}` });
     if (!PERIODS.includes(period)) return sendJson(res, { error: `不支持的周期 ${period}` });
+    if (!periodOk(period, symbol)) return sendJson(res, { error: `${symbol.name} 没有${findPeriod(period).label}数据（板块不提供分钟线）` });
     buildData(symbol, period)
       .then((msg) => sendJson(res, msg))
       .catch((err) => sendJson(res, { error: `${symbol.code}: ${err.message}` }));
@@ -496,6 +511,7 @@ function handleHttp(req, res) {
 
 await loadUniverse(adapter);
 if (!findSymbol(state.symbol)) state.symbol = defaultSymbol();
+if (!periodOk(state.period, findSymbol(state.symbol))) state.period = 'D';
 state.watchlist = cleanWatchlist(state.watchlist);
 
 server.listen(PORT, HOST, () => {
@@ -511,10 +527,34 @@ setInterval(() => { if (state.period !== 'T') loadData({ force: true }); loadRan
 setInterval(() => loadUniverse(adapter), +(process.env.UNIVERSE_REFRESH_MS || 30 * 60_000));
 setInterval(() => { if (state.period === 'T') loadData({ force: true }); }, INTRADAY_REFRESH_MS);
 
+/**
+ * 盘后同步完顺带把自选 + 当前标的的分钟 K 拉进本地库，导播切到分钟周期时不用等。
+ * 逐个串行请求，失败只打日志（多半是没开通分钟权限或限流）
+ */
+let prewarming = false;
+async function prewarmMinutes() {
+  if (!HAS_MINUTES || prewarming) return;
+  prewarming = true;
+  const codes = [...new Set([state.symbol, ...state.watchlist.map((w) => w.code)])];
+  const symbols = codes.map(findSymbol).filter((sym) => sym && periodOk('m5', sym));
+  const freqs = PERIODS.map(findPeriod).filter((p) => p.kind === 'minute').map((p) => p.freq);
+  let ok = 0, failed = 0;
+  for (const sym of symbols) {
+    for (const freq of freqs) {
+      try { await getMinutes(sym, freq, { force: true }); ok++; } catch (err) {
+        failed++;
+        if (failed <= 3) console.warn(`[minutes] 预拉 ${sym.code} ${freq}min 失败：${err.message}`);
+      }
+    }
+  }
+  if (symbols.length) console.log(`[minutes] 预拉分钟 K：${symbols.length} 个标的，成功 ${ok}，失败 ${failed}`);
+  prewarming = false;
+}
+
 // 盘后定时同步（SYNC_WINDOW / SYNC_EVERY / SYNC_AT，见 server/sync-runner.js）
 initSync({
   // 同步完：重新载入标的池（新上市股票 / 新概念）并刷新画面
-  onFinish: async () => { clearRankingCache(); await loadUniverse(adapter); refreshAll(); },
+  onFinish: async () => { clearRankingCache(); await loadUniverse(adapter); refreshAll(); prewarmMinutes(); },
   onChange: broadcastStatus,
 });
 startSchedule();

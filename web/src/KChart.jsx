@@ -31,7 +31,10 @@ function chartOptions(terminal, periodRef, scale) {
         const d = new Date(ts);
         const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         const p = periodRef.current;
-        if (p === 'T') return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        if (p === 'T') return hm;
+        if (p?.startsWith('m')) return type === 2 ? `${md} ${hm}` : `${d.getFullYear()}-${md} ${hm}`; // 分钟 K
+        if (p === 'Y') return `${d.getFullYear()}`;
         if (type === 2 && p === 'D') return md;
         if (type === 2 && p === 'M') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
         return `${d.getFullYear()}-${md}`;

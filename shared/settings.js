@@ -32,6 +32,12 @@ export const DRAW_LINE_LIMITS = { min: 0.5, max: 6 };
 export const DRAW_LINE_PRESETS = [1, 1.5, 2, 3, 4];
 /** 直播画面的设计基准尺寸；尺寸变大时字号、线宽按比例放大 */
 export const BASE_SIZE = { width: 966, height: 320 };
+/**
+ * 安全区外：直播画面左右两侧各留 side px（直播时容易被裁掉），只铺底色、不放内容。
+ * 每侧最多占画面宽度的 SAFE_SIDE_MAX；底色透明度 0～100（%）
+ */
+export const SAFE_SIDE_MAX = 0.3;
+export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100 };
 
 export const DEFAULT_SETTINGS = {
   indicators: {
@@ -45,7 +51,16 @@ export const DEFAULT_SETTINGS = {
   },
   render: { ...BASE_SIZE },
   drawLine: 1.5,
+  safeArea: { ...DEFAULT_SAFE_AREA },
 };
+
+/** 安全区外宽度校验（每侧，px）：不合法返回错误描述 */
+export function checkSafeSide(v, width) {
+  const max = Math.floor(width * SAFE_SIDE_MAX);
+  return Number.isInteger(v) && v >= 0 && v <= max ? null : `0~${max} 的整数`;
+}
+export const checkSafeOpacity = (v) => (Number.isInteger(v) && v >= 0 && v <= 100 ? null : '0~100 的整数');
+export const checkSafeColor = (v) => (/^#[0-9a-f]{6}$/i.test(v ?? '') ? null : '颜色格式 #rrggbb');
 
 /** 画线粗细校验：不合法返回错误描述 */
 export function checkDrawLine(v) {
@@ -90,9 +105,21 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
     return Number.isFinite(v) && v >= min && v <= max ? v : fallback.render[k];
   };
   const drawLine = Number(raw?.drawLine);
+  const render = { width: size('width'), height: size('height') };
+  // 安全区外：旧版本没有这一项，用默认值；单项不合法时回退
+  const prevSafe = fallback.safeArea ?? DEFAULT_SAFE_AREA;
+  const side = Number(raw?.safeArea?.side);
+  const opacity = Number(raw?.safeArea?.opacity);
+  const color = raw?.safeArea?.color;
+  const safeArea = {
+    side: checkSafeSide(side, render.width) ? Math.min(prevSafe.side, Math.floor(render.width * SAFE_SIDE_MAX)) : side,
+    color: checkSafeColor(color) ? prevSafe.color : color.toLowerCase(),
+    opacity: checkSafeOpacity(opacity) ? prevSafe.opacity : opacity,
+  };
   return {
     indicators,
-    render: { width: size('width'), height: size('height') },
+    render,
+    safeArea,
     // 旧版本的设置里没有这一项：用默认值
     drawLine: checkDrawLine(drawLine) ? fallback.drawLine ?? DEFAULT_SETTINGS.drawLine : Math.round(drawLine * 10) / 10,
   };
@@ -111,6 +138,18 @@ export function maskName(name) {
   if (chars.length <= 1) return MASK;
   if (chars.length === 2) return chars[0] + MASK;
   return chars[0] + MASK.repeat(chars.length - 2) + chars[chars.length - 1];
+}
+
+/** 放内容的区域：画面宽度去掉两侧安全区外 */
+export function contentSize(settings) {
+  const side = settings?.safeArea?.side ?? 0;
+  return { width: settings.render.width - side * 2, height: settings.render.height };
+}
+
+/** 安全区外的底色（带透明度） */
+export function safeAreaFill({ color, opacity }) {
+  const n = parseInt(color.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${opacity / 100})`;
 }
 
 /** 字号、线宽等的放大倍数：按宽高里放大得少的那个算，避免溢出 */

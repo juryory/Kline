@@ -1,6 +1,7 @@
 // 实时直连 tushare（每次切标的都请求公网）。直播推荐用 local 适配器 + npm run sync。
 // 指数用 index_daily，同花顺板块用 ths_daily，个股用 daily（未复权）。vol 单位：手。
 import { queryAll, ymd, ymdToTs } from '../tushare-client.js';
+import { MINUTES_ENABLED, fetchMinutes, retentionStart, toBar } from '../minutes.js';
 
 export const label = 'Tushare';
 const YEARS = 3;
@@ -46,5 +47,21 @@ export async function getDaily(symbol) {
     .sort((a, b) => a.timestamp - b.timestamp); // tushare 返回倒序
 }
 
-// 分时：tushare 的分钟数据（stk_mins）需要单独开通权限。接入时在这里导出 getIntraday(symbol)，
-// 返回 { prevClose, bars }（见 adapters/index.js），导播台会自动出现「分时」。
+// 分钟 K / 分时：tushare 历史分钟（stk_mins / idx_mins，需单独开通权限），每次直接请求，不落盘（直播请用 local）
+async function getMinutesImpl(symbol, freq) {
+  return (await fetchMinutes(symbol, freq, retentionStart(freq))).map((r) => toBar(r));
+}
+
+async function getIntradayImpl(symbol) {
+  const rows = await fetchMinutes(symbol, 1, retentionStart(1));
+  if (!rows.length) throw new Error(`${symbol.code} 没有分时数据`);
+  const last = new Date(rows.at(-1).ts);
+  const dayStart = new Date(last.getFullYear(), last.getMonth(), last.getDate()).getTime();
+  const daily = await getDaily(symbol);
+  const prev = daily.filter((b) => b.timestamp < dayStart).at(-1);
+  const bars = rows.filter((r) => r.ts >= dayStart).map((r) => toBar(r));
+  return { prevClose: prev?.close ?? bars[0].open, bars };
+}
+
+export const getMinutes = MINUTES_ENABLED ? getMinutesImpl : undefined;
+export const getIntraday = MINUTES_ENABLED ? getIntradayImpl : undefined;

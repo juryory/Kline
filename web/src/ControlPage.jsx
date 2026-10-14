@@ -6,10 +6,10 @@ import SymbolSearch from './SymbolSearch.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
 import RankBrowser from './RankBrowser.jsx';
 import MacroPage from './MacroPage.jsx';
-import { endIndexOf, minBarsFor, moveView, periodsFor, quoteOf, stepPeriod } from './view.js';
+import { endIndexOf, minBarsFor, moveView, periodsFor, quoteOf, stepPeriod, PRIMARY_PERIODS } from './view.js';
 import { MAIN, SUB } from './indicators.js';
 import { DRAW_TOOLS, dragDrawable } from './drawTools.js';
-import { isSymbolMasked, maskName } from '../../shared/settings.js';
+import { contentSize, isSymbolMasked, maskName } from '../../shared/settings.js';
 import './control.css';
 
 // 底部预览框的最大尺寸，直播画面按比例缩小放进去
@@ -90,6 +90,35 @@ function Seg({ items, value, onPick, disabled, allowNone }) {
   );
 }
 
+/**
+ * 周期按钮：周期多（分时 / 4 种分钟 K / 日周月年），收起时只显示常用的几个 + 当前选中的，
+ * 箭头展开全部。展开状态记在本机浏览器
+ */
+const PERIODS_OPEN_KEY = 'kline.periodsOpen';
+function PeriodSeg({ items, value, onPick, disabled }) {
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem(PERIODS_OPEN_KEY) === '1'; } catch { return false; }
+  });
+  const toggle = () => {
+    setOpen((v) => {
+      try { localStorage.setItem(PERIODS_OPEN_KEY, v ? '0' : '1'); } catch { /* 隐私模式等，忽略 */ }
+      return !v;
+    });
+  };
+  const shown = open ? items : items.filter((x) => PRIMARY_PERIODS.includes(x.key) || x.key === value);
+  const hidden = items.length - shown.length;
+  return (
+    <div className="seg periods">
+      <Seg items={shown} value={value} onPick={onPick} disabled={disabled} />
+      {(hidden > 0 || open) && items.length > PRIMARY_PERIODS.length && (
+        <button className="fold" title={open ? '收起周期' : `更多周期（${items.filter((x) => !shown.includes(x)).map((x) => x.label).join(' ')}）`} onClick={toggle}>
+          {open ? '‹' : '›'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // 触屏为主的设备（iPad）：不显示底部的直播预览和快捷键说明，K 线区域占满剩余高度
 const TOUCH_QUERY = '(pointer: coarse)';
 function useTouchDevice() {
@@ -133,9 +162,9 @@ export default function ControlPage() {
 
   // 事件处理里要读最新值
   const latest = useRef();
-  const periods = periodsFor(status);
+  const periods = periodsFor(status, data?.symbol);
   const render = state?.settings.render ?? { width: 966, height: 320 };
-  const minBars = minBarsFor(render.width);
+  const minBars = minBarsFor(state ? contentSize(state.settings).width : render.width); // K 线只画在安全区内
   latest.current = { data, view, state, send, periods, minBars, settingsOpen, tab, drawTool, selectedDraw, local };
 
   // 本地浏览时：LOCAL_KEYS 只改本机，画线操作丢弃，其余（自选、设置、画面开关）照常发给服务端
@@ -398,7 +427,7 @@ export default function ControlPage() {
             </button>
           )}
           <span className="spacer" />
-          <Seg items={periods} value={state?.period} disabled={!ready} onPick={(k) => set({ period: k })} />
+          <PeriodSeg items={periods} value={state?.period} disabled={!ready} onPick={(k) => set({ period: k })} />
           <span className="label">主图</span>
           <Seg items={MAIN} value={state?.main} disabled={!ready || data?.period === 'T'} allowNone onPick={(k) => set({ main: k })} />
           <span className="label">副图</span>

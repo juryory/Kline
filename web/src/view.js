@@ -1,3 +1,5 @@
+import { PERIODS, periodsFor as periodsForCaps } from '../../shared/periods.js';
+
 /**
  * 视图 = { bars: 显示多少根, end: 最右一根的时间戳（null = 跟随最新） }
  * 导播台和渲染页共用同一个视图，各自按自己的宽度计算柱宽，所以显示的区间完全一致。
@@ -7,16 +9,14 @@ export const MIN_BARS = 40;
 export const MAX_BARS = 1000;
 export const INTRADAY_POINTS = 241; // 9:30–11:30 + 13:01–15:00
 
-/** 周期从小到大；回车往左（更细），Backspace 往右（更粗） */
-export const PERIODS = [
-  { key: 'T', label: '分时' },
-  { key: 'D', label: '日K' },
-  { key: 'W', label: '周K' },
-  { key: 'M', label: '月K' },
-];
+export { PERIODS, PRIMARY_PERIODS, isMinutePeriod } from '../../shared/periods.js';
 
-/** 当前数据源可用的周期：数据源不支持分时（如本地日线库）时去掉「分时」 */
-export const periodsFor = (status) => (status?.intraday === false ? PERIODS.filter((p) => p.key !== 'T') : PERIODS);
+/**
+ * 当前数据源 + 标的可用的周期（从小到大；回车往左更细，Backspace 往右更粗）。
+ * 数据源不支持分时 / 分钟 K、或标的是板块（没有分钟数据）时去掉对应周期
+ */
+export const periodsFor = (status, symbol = null) =>
+  periodsForCaps({ intraday: status?.intraday !== false, minutes: !!status?.minutes }, symbol);
 
 export function stepPeriod(period, dir, list = PERIODS) {
   const i = list.findIndex((p) => p.key === period);

@@ -1,5 +1,5 @@
 import { RANK_COLUMNS, columnLabel, fmtDate } from './rankColumns.js';
-import { renderScale } from '../../shared/settings.js';
+import { contentSize, renderScale } from '../../shared/settings.js';
 import './panel.css';
 
 /**
@@ -7,7 +7,7 @@ import './panel.css';
  * 行高按前 N 名平均分配，填满画面；排序列高亮。
  */
 export default function RankPanel({ rank, state }) {
-  const scale = renderScale(state.settings.render);
+  const scale = renderScale(contentSize(state.settings)); // 两侧安全区外不放内容
   const title = `${rank.listName} · ${columnLabel(rank.sort)}${rank.desc ? '榜' : '（升序）'}`;
 
   return (

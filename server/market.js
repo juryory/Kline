@@ -1,4 +1,4 @@
-// 行情缓存 + 周期聚合。只缓存日线，周/月线现算。
+// 行情缓存 + 周期聚合。缓存日线 / 分时 / 分钟 K，周 / 月 / 年线由日线现算。
 import adapter from './adapters/index.js';
 
 const TTL = +(process.env.CACHE_TTL_MS || 5 * 60_000);
@@ -42,12 +42,29 @@ export async function getIntraday(symbol, { force = false } = {}) {
   return value;
 }
 
-/** 日线聚合：period = 'D' | 'W' | 'M'，时间戳取该周期最后一个交易日 */
+const MINUTE_TTL = 60_000;
+const minuteCache = new Map(); // `${code}|${freq}` -> { bars, at }
+
+/** 分钟 K（freq = 5 / 15 / 30 / 60），内存缓存 1 分钟；本地库那层的缓存见 server/minutes.js */
+export async function getMinutes(symbol, freq, { force = false } = {}) {
+  if (!adapter.getMinutes) throw new Error('当前数据源不支持分钟 K');
+  const key = `${symbol.code}|${freq}`;
+  const hit = minuteCache.get(key);
+  if (!force && hit && Date.now() - hit.at < MINUTE_TTL) return hit.bars;
+  const bars = (await adapter.getMinutes(symbol, freq)).filter((b) =>
+    [b.open, b.high, b.low, b.close].every(Number.isFinite) && Number.isFinite(b.timestamp));
+  if (!bars.length) throw new Error(`${symbol.code} 没有 ${freq} 分钟数据`);
+  minuteCache.set(key, { bars, at: Date.now() });
+  return bars;
+}
+
+/** 日线聚合：period = 'D' | 'W' | 'M' | 'Y'，时间戳取该周期最后一个交易日 */
 export function aggregate(daily, period) {
   if (period === 'D') return daily;
   const keyOf = (ts) => {
     const d = new Date(ts);
     if (period === 'M') return d.getFullYear() * 100 + d.getMonth();
+    if (period === 'Y') return d.getFullYear();
     return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)).getTime();
   };
   const out = [];

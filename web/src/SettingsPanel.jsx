@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, checkIndicator, checkDrawLine,
+  INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, DEFAULT_SAFE_AREA, checkIndicator, checkDrawLine,
+  checkSafeSide, checkSafeOpacity, checkSafeColor, safeAreaFill,
 } from '../../shared/settings.js';
 import { DRAW_COLOR } from './drawTools.js';
 
@@ -15,6 +16,7 @@ const toDraft = (s) => ({
   indicators: Object.fromEntries(Object.entries(s.indicators).map(([k, v]) => [k, v.map(String)])),
   render: { width: String(s.render.width), height: String(s.render.height) },
   drawLine: String(s.drawLine),
+  safeArea: (({ side, color, opacity }) => ({ side: String(side), color, opacity: String(opacity) }))(s.safeArea ?? DEFAULT_SAFE_AREA),
 });
 const toNumbers = (arr) => arr.map((v) => (v.trim() === '' ? NaN : Number(v)));
 
@@ -119,7 +121,12 @@ export default function SettingsPanel({ settings, showSync, onSave, onClose }) {
   const wErr = sizeError('width', draft.render.width);
   const hErr = sizeError('height', draft.render.height);
   const lineErr = checkDrawLine(draft.drawLine.trim() === '' ? NaN : Number(draft.drawLine));
-  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr;
+  const safeSideErr = wErr ? null : checkSafeSide(Number(draft.safeArea.side), Number(draft.render.width));
+  const safeOpacityErr = checkSafeOpacity(Number(draft.safeArea.opacity));
+  const safeColorErr = checkSafeColor(draft.safeArea.color);
+  const safeErr = safeSideErr || safeOpacityErr || safeColorErr;
+  const setSafe = (patch) => setDraft((d) => ({ ...d, safeArea: { ...d.safeArea, ...patch } }));
+  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeErr;
 
   const save = () => {
     if (invalid) return;
@@ -127,6 +134,7 @@ export default function SettingsPanel({ settings, showSync, onSave, onClose }) {
       indicators: Object.fromEntries(Object.entries(draft.indicators).map(([k, v]) => [k, toNumbers(v)])),
       render: { width: Number(draft.render.width), height: Number(draft.render.height) },
       drawLine: Number(draft.drawLine),
+      safeArea: { side: Number(draft.safeArea.side), color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) },
     });
   };
 
@@ -194,7 +202,24 @@ export default function SettingsPanel({ settings, showSync, onSave, onClose }) {
             </div>
             {(wErr || hErr) && <span className="param-error">宽 {wErr ?? '✓'}，高 {hErr ?? '✓'}</span>}
           </div>
+          <div className="param-row">
+            <span className="param-name">安全区外</span>
+            <div className="param-inputs">
+              <label>左右各 <input value={draft.safeArea.side} inputMode="numeric" onChange={(e) => setSafe({ side: e.target.value })} /> px</label>
+              <label>底色 <input type="color" className="color" value={safeColorErr ? '#000000' : draft.safeArea.color} onChange={(e) => setSafe({ color: e.target.value })} /></label>
+              <label>透明度 <input value={draft.safeArea.opacity} inputMode="numeric" onChange={(e) => setSafe({ opacity: e.target.value })} /> %</label>
+              {!safeErr && Number(draft.safeArea.side) > 0 && (
+                <span className="safe-sample" aria-hidden="true">
+                  <i style={{ background: safeAreaFill({ color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) }) }} />
+                  <b />
+                  <i style={{ background: safeAreaFill({ color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) }) }} />
+                </span>
+              )}
+            </div>
+            {safeErr && <span className="param-error">{safeSideErr ? `宽度 ${safeSideErr}` : safeOpacityErr ? `透明度 ${safeOpacityErr}` : safeColorErr}</span>}
+          </div>
           <p className="note">改尺寸后，vMix 里浏览器源的宽高要改成一样的数值。画面比 966×320 大时，文字和线条按比例放大。</p>
+          <p className="note">安全区外：画面左右两侧直播时容易被裁掉，这部分只显示底色（透明度 0 = 完全透明），K 线和文字都放在中间。0 = 不留。</p>
         </section>
 
         <section>

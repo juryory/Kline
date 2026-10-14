@@ -3,6 +3,7 @@
 import { openDb } from '../db.js';
 import { ymdToTs } from '../tushare-client.js';
 import { computeRanking } from '../rank.js';
+import { MINUTES_ENABLED, readMinutes, toBar } from '../minutes.js';
 
 export const label = 'Tushare';
 
@@ -54,4 +55,45 @@ export async function getRanking(listKey) {
   return computeRanking(getDb(), listKey);
 }
 
-// 不导出 getIntraday：本地库只有日线，导播台会自动隐藏「分时」
+// ---------------- 分钟 K / 分时（tushare 历史分钟，按需拉取缓存到本地库，见 server/minutes.js） ----------------
+// 没有 TUSHARE_TOKEN 或 MINUTE_MONTHS=0 时不导出，导播台自动隐藏这些周期
+
+/** 当天的前复权系数：与日线一致，以最新复权因子为基准 */
+function adjFactors(code) {
+  const factors = getDb().prepare('SELECT date, factor FROM adj WHERE code = ? ORDER BY date').all(code);
+  const latest = factors.at(-1)?.factor;
+  if (!latest) return () => 1;
+  return (ts) => {
+    const d = new Date(ts);
+    const ymd = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+    let lo = 0, hi = factors.length - 1, f = factors[0].factor;
+    while (lo <= hi) { // 当天或之前最近一天的因子
+      const mid = (lo + hi) >> 1;
+      if (factors[mid].date <= ymd) { f = factors[mid].factor; lo = mid + 1; } else hi = mid - 1;
+    }
+    return f / latest;
+  };
+}
+
+/** 分钟 K：freq = 5 / 15 / 30 / 60，最近 MINUTE_MONTHS 个月。个股前复权，指数原样 */
+async function getMinutesImpl(symbol, freq) {
+  const rows = await readMinutes(getDb(), symbol, freq);
+  if (!rows.length) throw new Error(`${symbol.code} 没有 ${freq} 分钟数据`);
+  const k = symbol.type === 'stock' ? adjFactors(symbol.code) : () => 1;
+  return rows.map((r) => toBar(r, k(r.ts)));
+}
+
+/** 分时：最近一个交易日的 1 分钟线（不复权），昨收取本地日线里前一个交易日的收盘价 */
+async function getIntradayImpl(symbol) {
+  const rows = await readMinutes(getDb(), symbol, 1);
+  if (!rows.length) throw new Error(`${symbol.code} 没有分时数据`);
+  const last = new Date(rows.at(-1).ts);
+  const dayStart = new Date(last.getFullYear(), last.getMonth(), last.getDate()).getTime();
+  const ymd = last.getFullYear() * 10000 + (last.getMonth() + 1) * 100 + last.getDate();
+  const bars = rows.filter((r) => r.ts >= dayStart).map((r) => toBar(r));
+  const prev = getDb().prepare('SELECT close FROM daily WHERE code = ? AND date < ? ORDER BY date DESC LIMIT 1').get(symbol.code, ymd);
+  return { prevClose: prev?.close ?? bars[0].open, bars };
+}
+
+export const getMinutes = MINUTES_ENABLED ? getMinutesImpl : undefined;
+export const getIntraday = MINUTES_ENABLED ? getIntradayImpl : undefined;

@@ -88,3 +88,41 @@ export async function getIntraday(symbol) {
   });
   return { prevClose, bars };
 }
+
+/**
+ * 分钟 K：最近约半年（125 个交易日），freq = 5 / 15 / 30 / 60。
+ * 每天从日线开盘价随机游走到收盘价，K 线时间戳取该根结束时刻（与 tushare 一致：9:35、9:40 … 11:30、13:05 … 15:00）
+ */
+export async function getMinutes(symbol, freq) {
+  const daily = (await getDaily(symbol)).slice(-125);
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const out = [];
+  for (const day of daily) {
+    const rand = mulberry32(hash(symbol.code) ^ day.timestamp ^ freq);
+    const base = new Date(day.timestamp);
+    const at = (m) => new Date(base.getFullYear(), base.getMonth(), base.getDate(), Math.floor(m / 60), m % 60).getTime();
+    const ends = [];
+    for (let m = 9 * 60 + 30 + freq; m <= 11 * 60 + 30; m += freq) ends.push(at(m));
+    for (let m = 13 * 60 + freq; m <= 15 * 60; m += freq) ends.push(at(m));
+    const n = ends.length;
+    const sigma = (day.high - day.low) / 4;
+    let walk = 0;
+    const path = [day.open];
+    for (let i = 1; i <= n; i++) {
+      walk += (rand() - 0.5) * sigma;
+      path.push(day.open + walk - (i / n) * walk + (i / n) * (day.close - day.open));
+    }
+    path[n] = day.close;
+    for (let i = 0; i < n; i++) {
+      const open = path[i], close = path[i + 1];
+      const volume = Math.round((day.volume / n) * (0.6 + rand() * 0.8));
+      out.push({
+        timestamp: ends[i],
+        open: r2(open), close: r2(close),
+        high: r2(Math.max(open, close) * (1 + rand() * 0.002)), low: r2(Math.min(open, close) * (1 - rand() * 0.002)),
+        volume, turnover: volume * 100 * close,
+      });
+    }
+  }
+  return out;
+}
