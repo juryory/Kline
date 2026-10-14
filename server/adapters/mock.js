@@ -1,6 +1,6 @@
 // 假数据：按标的代码做种子，每次启动走势一致；最后一根收盘价 = symbol.mock.endClose
 
-import { BREADTH_INDEX } from '../breadth.js';
+import { hasBreadth } from '../breadth.js';
 
 export const label = '示例数据';
 
@@ -89,7 +89,7 @@ export async function getIntraday(symbol) {
     };
   });
   // 大盘指数：假的领先指标（围绕指数走、偏离逐渐放大）和涨跌家数，形态同 server/breadth.js
-  if (BREADTH_INDEX[symbol.code]) {
+  if (hasBreadth(symbol.code)) {
     let drift = 0;
     bars.forEach((b, i) => {
       drift += (rand() - 0.55) * prevClose * 0.0004;

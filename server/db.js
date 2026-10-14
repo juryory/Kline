@@ -72,11 +72,16 @@ const SCHEMA = `
     code TEXT, freq INTEGER, fetched_at INTEGER, last_ts INTEGER,
     PRIMARY KEY (code, freq)
   ) WITHOUT ROWID;
-  -- 大盘分时的领先指标 / 红绿柱（server/breadth.js 盘后计算）：market = SH / SZ / CY / KC，
+  -- 大盘分时的领先指标 / 红绿柱（server/breadth.js 盘后计算）：market = SH / SZ / CY 或成分股指数代码，
   -- lead = 各股相对昨收涨跌幅的简单平均（小数），up / down = 上涨 / 下跌家数
   CREATE TABLE IF NOT EXISTS breadth (
     market TEXT, ts INTEGER, lead REAL, up INTEGER, down INTEGER,
     PRIMARY KEY (market, ts)
+  ) WITHOUT ROWID;
+  -- 成分股指数（沪深300、中证500 等）的成分股，算领先指标 / 红绿柱用（tushare index_weight，按月刷新）
+  CREATE TABLE IF NOT EXISTS index_members (
+    index_code TEXT, stock TEXT,
+    PRIMARY KEY (index_code, stock)
   ) WITHOUT ROWID;
   -- 杂项：如成分股上次刷新时间
   CREATE TABLE IF NOT EXISTS meta (
