@@ -37,6 +37,9 @@ const THS_TYPES = (process.env.SYNC_THS_TYPES || 'N,I').split(',').map((s) => s.
 const MIN_INTERVAL_MS = +(process.env.SYNC_INTERVAL_MS || 130); // 约 450 次/分钟，低于 500 次/分钟上限
 // 板块排名用的涨停、资金流只需要最近的数据
 const RECENT_DAYS = 20;
+// 按交易日拉的数据，最近几个交易日每次都重拉：tushare 当天的数据可能分批发布（如同花顺板块日线先出一部分），
+// 只要返回了数据就标记完成的话，后发布的就再也补不上
+const RECHECK_DAYS = 2;
 // 成分股刷新周期（天）；设 SYNC_MEMBERS=1 可强制本次刷新
 const MEMBERS_TTL_DAYS = 7;
 
@@ -233,8 +236,9 @@ for (const job of JOBS) {
       const earliest = await earliestDate(job);
       days = boardDays.filter((d) => d >= earliest);
     }
-    const todo = days.filter((d) => !done.has(d));
-    console.log(`[sync] ${job.api}：共 ${days.length} 个交易日，待同步 ${todo.length} 个`);
+    const recheck = new Set(days.slice(-RECHECK_DAYS));
+    const todo = days.filter((d) => !done.has(d) || recheck.has(d));
+    console.log(`[sync] ${job.api}：共 ${days.length} 个交易日，待同步 ${todo.length} 个（含最近 ${RECHECK_DAYS} 天重拉）`);
     const every = todo.length > 500 ? 250 : 20; // 首次补历史时少打点日志
     let emptyOld = 0;
 

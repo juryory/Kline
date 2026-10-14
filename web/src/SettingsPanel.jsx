@@ -84,6 +84,10 @@ function SyncSection() {
                   {DATASETS.map(([k]) => (
                     <td key={k} className={r.lagging?.includes(k) ? 'lag' : r.arrived?.includes(k) ? 'new' : ''}>
                       {fmtMd(r.after?.[k])}{r.arrived?.includes(k) && ' 新'}
+                      {/* 板块只到了一部分：显示 已到 / 应有 */}
+                      {r.coverage?.[k] && r.coverage[k][0] < r.coverage[k][1] && (
+                        <span className="cov"> {r.coverage[k][0]}/{r.coverage[k][1]}</span>
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -96,6 +100,7 @@ function SyncSection() {
       )}
       <p className="note">
         日期 = 同步后本地库里该数据的最新交易日；<b className="new">新</b> = 本次同步新到；
+        板块列后面的 312/420 = 只有 312 个板块到了最新日期（tushare 分批发布，后面的同步会补齐）；
         <span className="lag">灰色</span> = 仍落后于个股（tushare 还没发布）。完整日志在服务器 data/sync-logs/。
       </p>
     </section>

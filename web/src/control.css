@@ -279,6 +279,7 @@
 .term .modal .sync-table td.bad { color: #ff8a8a; }
 .term .modal .new, .term .modal .sync-table td.new { color: #9be3b4; font-weight: 600; }
 .term .modal .lag, .term .modal .sync-table td.lag { color: #6a6a74; }
+.term .modal .sync-table .cov { color: #e0b050; font-weight: 400; }
 .term .side h3 { margin: 0 0 8px; font-size: 14px; }
 .term .side .range { margin: 0 0 12px; color: #cfcfd8; }
 .term .tag { margin-left: 8px; padding: 1px 6px; border-radius: 3px; background: #6b4a12; color: #ffd98a; font-size: 12px; }

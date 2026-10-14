@@ -54,6 +54,31 @@ function dataDates() {
   }
 }
 
+/**
+ * 板块类数据的覆盖情况：{ key: [已到最新日期的板块数, 应有的板块数] }。
+ * 应有 = 最新日期或前一个更新日期有数据的板块（停发、新设的不算），用来看出「只发布了一部分」
+ */
+const COVERAGE = { thn: 'THN', thi: 'THI', sw1: 'SW1' };
+function dataCoverage() {
+  try {
+    if (!db) return {};
+    const latestOf = db.prepare('SELECT MAX(date) AS d FROM daily WHERE code = ?');
+    const out = {};
+    for (const [key, cat] of Object.entries(COVERAGE)) {
+      const dates = db.prepare('SELECT code FROM symbols WHERE category = ?').all(cat).map((r) => latestOf.get(r.code).d).filter(Boolean);
+      if (!dates.length) continue;
+      const max = Math.max(...dates);
+      const prev = Math.max(0, ...dates.filter((d) => d < max));
+      out[key] = [dates.filter((d) => d === max).length, dates.filter((d) => d >= prev).length];
+    }
+    return out;
+  } catch (err) {
+    console.error('[sync] 读取板块覆盖情况失败', err.message);
+    return {};
+  }
+}
+const partial = (cov) => !!cov && cov[0] < cov[1];
+
 // ---------------- 运行记录 ----------------
 function appendHistory(record) {
   try {
@@ -117,7 +142,8 @@ function todayArrivals() {
   for (const run of readHistory(200).reverse()) {
     if (ymdOf(run.startedAt) !== today) continue;
     for (const s of DATASETS) {
-      if (!out[s.key] && run.after?.[s.key] === today) out[s.key] = run.finishedAt;
+      // 板块只发布了一部分时不算到达，等全部到齐的那次
+      if (!out[s.key] && run.after?.[s.key] === today && !partial(run.coverage?.[s.key])) out[s.key] = run.finishedAt;
     }
   }
   return out;
@@ -127,6 +153,7 @@ export function startSync(trigger = 'manual') {
   if (sync.running) return false;
   const startedAt = Date.now();
   const before = dataDates();
+  const coverageBefore = dataCoverage();
   Object.assign(sync, { trigger, startedAt, finishedAt: null, exitCode: null, log: [] });
 
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -151,11 +178,14 @@ export function startSync(trigger = 'manual') {
   child.on('close', async (code) => {
     const finishedAt = Date.now();
     const after = dataDates();
-    const arrived = DATASETS.filter((s) => after[s.key] && after[s.key] !== before[s.key]).map((s) => s.key);
+    const coverage = dataCoverage();
+    // 新到：最新日期变了，或者之前只到了一部分板块、这次到齐了
+    const arrived = DATASETS.filter((s) => after[s.key] && (after[s.key] !== before[s.key]
+      || (partial(coverageBefore[s.key]) && !partial(coverage[s.key])))).map((s) => s.key);
     // 「还没发布」：比个股日线落后的数据集（个股日线一般 16 点前就有）
     const lagging = DATASETS.filter((s) => s.key !== 'stock' && after.stock && after[s.key] && after[s.key] < after.stock).map((s) => s.key);
     const record = {
-      trigger, startedAt, finishedAt, exitCode: code, before, after, arrived, lagging,
+      trigger, startedAt, finishedAt, exitCode: code, before, after, coverage, arrived, lagging,
       log: path.relative(DATA_DIR, logFile),
     };
     appendHistory(record);
@@ -163,7 +193,8 @@ export function startSync(trigger = 'manual') {
     pruneLogs();
     Object.assign(sync, { running: null, finishedAt, exitCode: code });
 
-    const label = (keys) => keys.map((k) => `${DATASETS.find((s) => s.key === k).label} ${after[k]}`).join('、') || '无';
+    const label = (keys) => keys.map((k) => `${DATASETS.find((s) => s.key === k).label} ${after[k]}`
+      + (partial(coverage[k]) ? `（${coverage[k][0]}/${coverage[k][1]} 个板块）` : '')).join('、') || '无';
     console.log(`[sync] ${hm(startedAt)} ${TRIGGER_LABEL[trigger] ?? trigger}同步结束 exit=${code} 用时 ${Math.round((finishedAt - startedAt) / 1000)}s`
       + `｜新到：${label(arrived)}｜仍落后于个股：${label(lagging)}`);
 
