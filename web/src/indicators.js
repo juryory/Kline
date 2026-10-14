@@ -61,7 +61,9 @@ export function indicatorCreate(key, params) {
  * 分时图主图指标（extendData = 昨收）：
  *   均价线：bar.avg，只有个股有
  *   领先指标（黄线）+ 红绿柱：bar.lead / bar.up / bar.down，只有大盘指数有（服务端盘后算好，见 server/breadth.js）
- *     红绿柱从昨收线往上（红，上涨家数多）/ 往下（绿）画，长度 = 涨跌家数差，按当天最大值缩放到半个纵轴
+ *     红绿柱 = 每分钟「上涨家数 − 下跌家数」比上一分钟的变化：变多（上涨在扩散）从昨收线往上画红柱，变少往下画绿柱。
+ *     用变化而不是绝对值：单边下跌的日子绝对值整天都是负的，会变成一排一样长的绿柱，看不出力度起伏。
+ *     长度按当天 95 分位缩放到 0.4 个纵轴半幅，个别特别大的（开盘几分钟）截断，免得把其余的压扁
  *   昨收虚线；两条透明线把纵轴撑成以昨收为中心上下对称（与同花顺一致，涨跌幅度一眼可比）
  */
 const LEAD_COLOR = '#f0b90b';
@@ -80,18 +82,24 @@ registerIndicator({
   calc: (list, indicator) => {
     const pc = indicator.extendData;
     if (!Number.isFinite(pc)) return list.map((k) => ({ avg: k.avg, lead: k.lead }));
-    let dev = 0, maxAdv = 0;
+    let dev = 0;
     for (const k of list) {
       dev = Math.max(dev, Math.abs(k.high - pc), Math.abs(k.low - pc));
       if (k.avg != null) dev = Math.max(dev, Math.abs(k.avg - pc));
       if (k.lead != null) dev = Math.max(dev, Math.abs(k.lead - pc));
-      if (k.up != null) maxAdv = Math.max(maxAdv, Math.abs(k.up - k.down));
     }
     dev = dev * 1.08 || pc * 0.01; // 留一点边；全天不动时按 ±1%
-    return list.map((k) => ({
+    // 涨跌家数差的逐分钟变化（第一分钟没有前值，记 0）
+    const delta = list.map((k, i) => {
+      const prev = list[i - 1];
+      return k.up != null && prev?.up != null ? (k.up - k.down) - (prev.up - prev.down) : k.up != null ? 0 : null;
+    });
+    const mags = delta.filter((d) => d).map(Math.abs).sort((a, b) => a - b);
+    const scale = mags.length ? mags[Math.min(mags.length - 1, Math.floor(mags.length * 0.95))] : 0;
+    return list.map((k, i) => ({
       avg: k.avg, lead: k.lead, pc, hi: pc + dev, lo: pc - dev,
       // 红绿柱的顶端（价格坐标）
-      ...(k.up != null && maxAdv > 0 && { bar: pc + ((k.up - k.down) / maxAdv) * dev * 0.5 }),
+      ...(delta[i] != null && scale > 0 && { bar: pc + Math.max(-1, Math.min(1, delta[i] / scale)) * dev * 0.4 }),
     }));
   },
   // 红绿柱：自己画细竖线（KLineChart 的柱子只能从固定值起画），返回 false 让上面的线照常画
@@ -99,6 +107,8 @@ registerIndicator({
     const pc = indicator.extendData;
     if (!Number.isFinite(pc)) return false;
     const y0 = yAxis.convertToPixel(pc);
+    ctx.save();
+    ctx.setLineDash([]); // 图表画虚线（昨收线）后画笔仍是虚线状态，这里改回实线
     ctx.lineWidth = 1;
     for (let i = visibleRange.from; i < visibleRange.to; i++) {
       const v = indicator.result[i]?.bar;
@@ -110,6 +120,7 @@ registerIndicator({
       ctx.lineTo(x, yAxis.convertToPixel(v));
       ctx.stroke();
     }
+    ctx.restore();
     return false;
   },
   // 图内左上角：均价（个股）/ 领先指标和涨跌家数（大盘）+ 当前点相对昨收的涨跌幅
