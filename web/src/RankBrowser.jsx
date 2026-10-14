@@ -5,25 +5,22 @@ import { RANK_COLUMNS, RANK_LISTS, sortRows, fmtDate } from './rankColumns.js';
  * 导播台「板块排名」页。列表 / 排序 / 前 N 名存在服务端（state.rank），改动立即反映到直播画面。
  * ↑↓ 选择，Enter / 双击 打开该板块 K 线（直播画面同步切到 K 线）。
  */
-export default function RankBrowser({ active, rank, setRank, onOpen }) {
+export default function RankBrowser({ active, rank, setRank, onOpen, syncedAt }) {
   const { list, sort, desc, top } = rank;
   const [res, setRes] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [sel, setSel] = useState(0);
   const [topDraft, setTopDraft] = useState(String(top));
   const tableRef = useRef(null);
 
   useEffect(() => setTopDraft(String(top)), [top]);
 
-  const load = () => {
-    setLoading(true);
+  // 切换列表、后台定时同步完成（syncedAt 变化）时重新拉取
+  useEffect(() => {
     fetch(`/api/rank?list=${list}`)
       .then((r) => r.json())
       .then(setRes)
-      .catch((err) => setRes({ error: err.message }))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, [list]);
+      .catch((err) => setRes({ error: err.message }));
+  }, [list, syncedAt]);
 
   const rows = useMemo(() => (res?.rows ? sortRows(res.rows, sort, desc) : []), [res, sort, desc]);
 
@@ -84,13 +81,12 @@ export default function RankBrowser({ active, rank, setRank, onOpen }) {
         </label>
         <span className="spacer" />
         {res?.date && <span className="muted">数据日期 {fmtDate(res.date)} · 共 {rows.length} 个</span>}
-        <button className="link" onClick={load} disabled={loading}>{loading ? '加载中…' : '刷新'}</button>
       </div>
 
       {res?.marketDate && res.date < res.marketDate && (
         <div className="rank-stale">
-          板块行情只到 {fmtDate(res.date)}，个股行情已到 {fmtDate(res.marketDate)}：同步时 tushare 还没发布当天的板块数据
-          （申万约 18:30，同花顺板块、涨停列表通常更晚）。晚些时候重新运行 <code>npm run sync</code> 即可补上。
+          板块行情只到 {fmtDate(res.date)}，个股行情已到 {fmtDate(res.marketDate)}：tushare 还没发布当天的板块数据。
+          后台收盘后定时同步，发布后会自动补上（设置 → 数据同步 可看每次同步记录）。
         </div>
       )}
 

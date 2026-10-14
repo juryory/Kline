@@ -26,51 +26,82 @@ function sizeError(k, v) {
 
 const fmtTime = (ts) => new Date(ts).toLocaleString('zh-CN', { hour12: false });
 
-/** 数据同步：触发服务端跑一次盘后同步（tushare → 本地库），同步中轮询进度。与「保存并应用」无关，点了立即执行 */
+const fmtHm = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+const fmtMd = (d) => (d ? `${String(d).slice(4, 6)}-${String(d).slice(6, 8)}` : '—');
+
+// 与 server/sync-runner.js 的 DATASETS 一致
+const DATASETS = [
+  ['stock', '个股'], ['thn', '同花顺概念'], ['thsflow', '概念资金流'], ['thi', '同花顺行业'],
+  ['sw1', '申万一级'], ['limit', '涨停'], ['flow', '个股资金流'],
+];
+
+/**
+ * 数据同步记录（只读）：服务端按 SYNC_WINDOW / SYNC_EVERY 定时从 tushare 同步，这里看每次同步后各数据的最新日期，
+ * 「新」= 本次同步新到的数据。用来观察同花顺概念等板块数据每天几点发布
+ */
 function SyncSection() {
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
 
-  const call = (method) => fetch('/api/sync', { method })
-    .then((r) => r.json())
-    .then((j) => { setInfo(j); setError(method === 'POST' && !j.ok ? j.error : null); })
-    .catch((err) => setError(`连接后台失败：${err.message}`));
-
-  useEffect(() => { call('GET'); }, []);
   useEffect(() => {
-    if (!info?.running) return;
-    const timer = setInterval(() => call('GET'), 2000);
+    const load = () => fetch('/api/sync').then((r) => r.json()).then((j) => { setInfo(j); setError(null); })
+      .catch((err) => setError(`连接后台失败：${err.message}`));
+    load();
+    const timer = setInterval(load, 15_000);
     return () => clearInterval(timer);
-  }, [info?.running]);
+  }, []);
 
-  let summary = '本次启动后还没有同步过';
-  if (info?.running) summary = `同步中…（${fmtTime(info.startedAt)} 开始）`;
-  else if (info?.finishedAt) {
-    const secs = Math.round((info.finishedAt - info.startedAt) / 1000);
-    summary = `上次同步 ${fmtTime(info.finishedAt)}，用时 ${secs}s，${info.exitCode === 0 ? '成功' : '有部分失败，见日志'}`;
-  }
-
+  const arrivals = info?.arrivals ?? {};
   return (
     <section>
       <h3>数据同步</h3>
-      <div className="param-row">
-        <span className="param-name">盘后数据</span>
-        <div className="param-inputs">
-          <button className="add" disabled={!info || info.running} onClick={() => call('POST')}>
-            {info?.running ? '同步中…' : '立即同步'}
-          </button>
-          <span className={`sync-summary ${info?.finishedAt && !info.running && info.exitCode !== 0 ? 'bad' : ''}`}>{summary}</span>
+      <p className="note">
+        自动同步：{info?.schedule ?? '…'}
+        {info?.running && ` · 同步中（${fmtHm(info.startedAt)} 开始）`}
+        {error && <span className="param-error"> {error}</span>}
+      </p>
+      <p className="note">
+        今天数据到达：
+        {DATASETS.map(([k, label]) => `${label} ${arrivals[k] ? fmtHm(arrivals[k]) : '未到'}`).join(' · ')}
+      </p>
+      {info?.history?.length > 0 ? (
+        <div className="sync-table-wrap">
+          <table className="sync-table">
+            <thead>
+              <tr>
+                <th>同步时间</th><th>用时</th><th>结果</th>
+                {DATASETS.map(([k, label]) => <th key={k}>{label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {info.history.map((r) => (
+                <tr key={r.startedAt}>
+                  <td>{fmtTime(r.startedAt)}{r.trigger === 'manual' && ' 手动'}</td>
+                  <td>{Math.round((r.finishedAt - r.startedAt) / 1000)}s</td>
+                  <td className={r.exitCode === 0 ? '' : 'bad'}>{r.exitCode === 0 ? '成功' : '部分失败'}</td>
+                  {DATASETS.map(([k]) => (
+                    <td key={k} className={r.lagging?.includes(k) ? 'lag' : r.arrived?.includes(k) ? 'new' : ''}>
+                      {fmtMd(r.after?.[k])}{r.arrived?.includes(k) && ' 新'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        {error && <span className="param-error">{error}</span>}
-      </div>
-      {info?.log?.length > 0 && <pre className="sync-log">{info.log.slice(-8).join('\n')}</pre>}
-      <p className="note">从 tushare 拉取最新收盘数据写入本地库（同 npm run sync），平时几十秒到几分钟；同步期间直播不受影响，完成后画面自动刷新。</p>
+      ) : (
+        <p className="note">还没有同步记录。</p>
+      )}
+      <p className="note">
+        日期 = 同步后本地库里该数据的最新交易日；<b className="new">新</b> = 本次同步新到；
+        <span className="lag">灰色</span> = 仍落后于个股（tushare 还没发布）。完整日志在服务器 data/sync-logs/。
+      </p>
     </section>
   );
 }
 
 /** 导播台设置：指标参数 + 直播画面尺寸 + 画线粗细 + 数据同步。保存后服务端校验、落盘并广播到所有画面 */
-export default function SettingsPanel({ settings, canSync, onSave, onClose }) {
+export default function SettingsPanel({ settings, showSync, onSave, onClose }) {
   const [draft, setDraft] = useState(() => toDraft(settings));
 
   useEffect(() => {
@@ -191,7 +222,7 @@ export default function SettingsPanel({ settings, canSync, onSave, onClose }) {
           <p className="note">线段、射线、画笔等所有画线共用，已画的线也会一起改。直播画面比 966×320 大时按比例加粗。</p>
         </section>
 
-        {canSync && <SyncSection />}
+        {showSync && <SyncSection />}
 
         <footer>
           <button onClick={() => setDraft(toDraft(DEFAULT_SETTINGS))}>恢复默认</button>

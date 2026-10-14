@@ -20,7 +20,6 @@
  */
 import http from 'node:http';
 import fs from 'node:fs';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -30,6 +29,7 @@ import { getDaily, getIntraday, aggregate } from './market.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
+import { initSync, startSync, startSchedule, syncInfo, isSyncing, lastSyncAt } from './sync-runner.js';
 import {
   AUTH_ENABLED, authenticate, hasRole, originAllowed, verifyToken, loginCookie, authSummary, renderKeyFor,
 } from './auth.js';
@@ -320,7 +320,7 @@ function statusMsg() {
   return {
     type: 'status', error: lastError, clients, updatedAt: current?.updatedAt ?? null,
     source: adapterName, intraday: HAS_INTRADAY, rank: HAS_RANK, macro: HAS_MACRO,
-    syncing: !!sync.running,
+    syncing: isSyncing(), syncedAt: lastSyncAt(),
   };
 }
 
@@ -328,40 +328,6 @@ function statusMsg() {
 function refreshAll() {
   loadData({ force: true });
   loadRank();
-}
-
-// ---------------- 盘后同步（POST /api/sync 触发，子进程跑 scripts/sync.js） ----------------
-const SYNC_LOG_LINES = 200;
-const sync = { running: null, startedAt: null, finishedAt: null, exitCode: null, log: [] };
-
-function syncInfo() {
-  const { running, ...info } = sync;
-  return { running: !!running, ...info };
-}
-
-function startSync() {
-  if (sync.running) return false;
-  Object.assign(sync, { startedAt: Date.now(), finishedAt: null, exitCode: null, log: [] });
-  const child = spawn(process.execPath,
-    ['--env-file-if-exists=.env', '--disable-warning=ExperimentalWarning', 'scripts/sync.js'],
-    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-  sync.running = child;
-  const onData = (chunk) => {
-    for (const line of chunk.toString().split(/\r?\n/)) if (line) sync.log.push(line);
-    if (sync.log.length > SYNC_LOG_LINES) sync.log.splice(0, sync.log.length - SYNC_LOG_LINES);
-  };
-  child.stdout.on('data', onData);
-  child.stderr.on('data', onData);
-  child.on('close', async (code) => {
-    Object.assign(sync, { running: null, finishedAt: Date.now(), exitCode: code });
-    console.log(`[sync] 结束，exit=${code}`);
-    // 同步完：重新载入标的池（新上市股票 / 新概念）并刷新画面
-    await loadUniverse(adapter).catch((err) => console.error('[sync] 标的池重载失败', err.message));
-    refreshAll();
-  });
-  child.on('error', (err) => onData(`[sync] 启动失败：${err.message}`));
-  broadcastStatus();
-  return true;
 }
 
 function broadcastStatus() {
@@ -499,14 +465,14 @@ function handleHttp(req, res) {
       .catch((err) => sendJson(res, { error: err.message }));
     return;
   }
-  // 刷新数据：refresh = 重读本地数据；sync = 先从 tushare 同步再刷新（GET 查进度）
+  // 刷新数据：refresh = 重读本地数据；sync：GET 查进度和同步记录，POST 手动触发一次（admin，前台已不提供按钮，curl 用）
   if (url.pathname === '/api/refresh' && req.method === 'POST') {
     refreshAll();
     return sendJson(res, { ok: true });
   }
   if (url.pathname === '/api/sync') {
     if (req.method === 'POST') {
-      const started = startSync();
+      const started = startSync('manual');
       return sendJson(res, { ok: started, ...(!started && { error: '同步正在进行中' }), ...syncInfo() });
     }
     return sendJson(res, syncInfo());
@@ -545,30 +511,10 @@ setInterval(() => { if (state.period !== 'T') loadData({ force: true }); loadRan
 setInterval(() => loadUniverse(adapter), +(process.env.UNIVERSE_REFRESH_MS || 30 * 60_000));
 setInterval(() => { if (state.period === 'T') loadData({ force: true }); }, INTRADAY_REFRESH_MS);
 
-/**
- * 每日自动同步（容器里没有计划任务时用）：SYNC_AT=17:30（可多个，逗号分隔），
- * SYNC_DAYS=1-5（周一到周五，0/7 = 周日；也可写 1,3,5）。按容器时区（TZ）计时，不填 SYNC_AT 不启用
- */
-const SYNC_AT = (process.env.SYNC_AT || '').split(',').map((s) => s.trim()).filter((s) => /^\d{1,2}:\d{2}$/.test(s))
-  .map((s) => s.split(':').map(Number).map((n) => String(n).padStart(2, '0')).join(':'));
-function parseDays(spec = '1-5') {
-  const days = new Set();
-  for (const part of spec.split(',').map((s) => s.trim()).filter(Boolean)) {
-    const [a, b = a] = part.split('-').map(Number);
-    for (let d = a; d <= b; d++) days.add(d % 7);
-  }
-  return days;
-}
-const SYNC_DAYS = parseDays(process.env.SYNC_DAYS || '1-5');
-if (SYNC_AT.length) {
-  const done = new Set(); // 已触发过的「日期 时刻」，同一分钟内不重复
-  console.log(`[sync] 每日自动同步：${SYNC_AT.join(', ')}，星期 ${[...SYNC_DAYS].sort().join(',')}`);
-  setInterval(() => {
-    const now = new Date();
-    const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const key = `${now.toDateString()} ${hm}`;
-    if (!SYNC_AT.includes(hm) || !SYNC_DAYS.has(now.getDay()) || done.has(key)) return;
-    done.add(key);
-    console.log(`[sync] 定时同步 ${hm}${startSync() ? '' : '：上一次同步还没结束，跳过'}`);
-  }, 20_000);
-}
+// 盘后定时同步（SYNC_WINDOW / SYNC_EVERY / SYNC_AT，见 server/sync-runner.js）
+initSync({
+  // 同步完：重新载入标的池（新上市股票 / 新概念）并刷新画面
+  onFinish: async () => { await loadUniverse(adapter); refreshAll(); },
+  onChange: broadcastStatus,
+});
+startSchedule();

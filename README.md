@@ -135,7 +135,7 @@ docker compose exec kline npm run sync              # 首次建库（约半小�
 - **数据卷** `kline-data:/data`：`market.db`（行情库，含 `-wal` / `-shm`）和 `runtime/state.json`（导播状态：设置、自选、画线）。重建容器不丢。
   - 已有本地库可以直接拷进去，省掉首次同步：先停服务 `docker compose stop`，再 `docker compose cp data/market.db kline:/data/market.db`，然后 `docker compose start`。
   - 改用宿主机目录（如 `./kline-data:/data`）时，容器以 `node` 用户（uid 1000）运行，需要先 `chown -R 1000:1000 ./kline-data`。
-- **每日同步**：`.env.docker` 里 `SYNC_AT=17:30`、`SYNC_DAYS=1-5`，到点后台自动跑（同 `POST /api/sync`），不需要宿主机计划任务。也可以手动 `docker compose exec kline npm run sync`。
+- **定时同步**：`.env.docker` 里 `SYNC_WINDOW=15:30-23:30`、`SYNC_EVERY=30`、`SYNC_DAYS=1-5`，收盘后每 30 分钟后台自动同步一次，不需要宿主机计划任务。同步记录在导播台「设置 → 数据同步」，完整日志在数据卷的 `sync-logs/`。也可以手动 `docker compose exec kline npm run sync`。
 - **健康检查**：`GET /healthz`（不需要登录），镜像已配 `HEALTHCHECK`。
 - **只能跑一个实例**：导播状态和行情缓存在进程内存里，不要开多个副本。
 - **端口**只绑定 `127.0.0.1:8787`，由宝塔 Nginx 反向代理对外。宝塔给 `kline.example.com` 开 HTTPS，反向代理到 `http://127.0.0.1:8787`，配置里要有 WebSocket 和转发头：
@@ -178,19 +178,34 @@ npm start
 - 检索用的股票列表来自 `stock_basic`，同步后**重启服务**才会载入新上市的股票。
 - 可重复运行、可中断续传；当天数据未发布时会跳过，下次自动补上。
 - 当天复权因子若还没发布，沿用前一天的因子，下次同步后自动修正。
-- 同步和直播可以同时进行（SQLite WAL 模式）；服务 5 分钟内会读到新数据，也可以在导播台点「刷新行情」。
+- 同步和直播可以同时进行（SQLite WAL 模式）；后台同步完成后自动刷新画面和排名，命令行跑 `npm run sync` 的话服务 5 分钟内会读到新数据。
 - 也可以通过接口触发（不用登录直播机）：
-  - `POST /api/sync`：后台跑一次 `npm run sync`，完成后自动重载标的池并刷新画面；正在同步时再调用会返回 `ok: false`
-  - `GET /api/sync`：同步进度（`running` / `exitCode` / 最近 200 行日志）
-  - `POST /api/refresh`：只重新读取本地库并刷新画面（等同「刷新行情」）
+  - `POST /api/sync`（admin）：后台跑一次 `npm run sync`，完成后自动重载标的池并刷新画面；正在同步时再调用会返回 `ok: false`
+  - `GET /api/sync`：同步进度、定时设置、最近 60 次同步记录（`history`）、今天各数据第一次到达的时间（`arrivals`）
+  - `POST /api/refresh`：只重新读取本地库并刷新画面
 
   ```bash
   curl -X POST http://<直播机内网IP>:8787/api/sync
   ```
 
-### 每天自动同步
+### 收盘后定时同步
 
-后端内置定时同步：`.env` 里设 `SYNC_AT=17:30`（可多个，逗号分隔）、`SYNC_DAYS=1-5`，服务运行时到点自动跑。Docker 部署用这个。
+后端内置定时同步（需要 `TUSHARE_TOKEN`），按服务器时区计时：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `SYNC_WINDOW` | `15:30-23:30` | 时间窗口 |
+| `SYNC_EVERY` | `30` | 窗口内每隔多少分钟同步一次（15:30、16:00 …）；`0` = 关闭 |
+| `SYNC_AT` | 空 | 另外再加的固定时刻，可多个，逗号分隔（如 `08:30`） |
+| `SYNC_DAYS` | `1-5` | 星期，`0`/`7` = 周日，也可写 `1,3,5` |
+| `SYNC_LOG_KEEP` | `500` | 保留最近多少份同步日志 |
+
+每次同步都会留记录，用来观察同花顺概念等数据每天几点发布：
+
+- 导播台「设置 → 数据同步」：每次同步后各数据（个股、同花顺概念、概念资金流、申万、涨停、个股资金流）的最新日期，标出本次新到的数据和仍落后于个股的数据，以及今天每种数据第一次同步到的时间。
+- `data/sync-history.jsonl`：每次一行 JSON（起止时间、结果、同步前后各数据最新日期）。
+- `data/sync-logs/*.log`：每次同步的完整输出。
+- 服务日志（`docker compose logs kline`）每次一行摘要，如 `[sync] 18:30 定时同步结束 exit=0 用时 41s｜新到：同花顺概念 20261014｜仍落后于个股：概念资金流 20261013`。
 
 #### 或者用 Windows 计划任务
 

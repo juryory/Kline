@@ -348,7 +348,7 @@ export default function ControlPage() {
       {settingsOpen && state && (
         <SettingsPanel
           settings={state.settings}
-          canSync={status?.source === 'local' && auth?.role === 'admin'}
+          showSync={status?.source === 'local'}
           onClose={() => setSettingsOpen(false)}
           onSave={(settings) => { set({ settings }); setSettingsOpen(false); }}
         />
@@ -415,6 +415,7 @@ export default function ControlPage() {
             rank={state.rank}
             setRank={(patch) => set({ rank: { ...state.rank, ...patch } })}
             onOpen={(code) => set({ symbol: code, scene: 'kline' })}
+            syncedAt={status?.syncedAt}
           />
         </div>
       )}

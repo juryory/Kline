@@ -258,13 +258,17 @@
 .term .modal .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .term .modal footer { display: flex; gap: 10px; margin-top: 20px; padding: 0; border: none; }
 .term .modal footer .spacer { flex: 1; }
-.term .modal .sync-summary { color: var(--muted); font-size: 12px; }
-.term .modal .sync-summary.bad { color: #ff8a8a; }
-.term .modal .sync-log {
-  margin: 8px 0 0; padding: 8px 10px; max-height: 140px; overflow: auto;
-  background: #0f0f12; border: 1px solid #33333d; border-radius: 4px;
-  color: #b8b8c4; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+.term .modal .sync-table-wrap {
+  margin-top: 8px; max-height: 300px; overflow: auto;
+  border: 1px solid #33333d; border-radius: 4px; background: #0f0f12;
 }
+.term .modal .sync-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.term .modal .sync-table th, .term .modal .sync-table td { padding: 4px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid #22222a; }
+.term .modal .sync-table th { position: sticky; top: 0; background: #1b1b22; color: var(--muted); font-weight: 500; }
+.term .modal .sync-table td { color: #cfcfd8; }
+.term .modal .sync-table td.bad { color: #ff8a8a; }
+.term .modal .new, .term .modal .sync-table td.new { color: #9be3b4; font-weight: 600; }
+.term .modal .lag, .term .modal .sync-table td.lag { color: #6a6a74; }
 .term .side h3 { margin: 0 0 8px; font-size: 14px; }
 .term .side .range { margin: 0 0 12px; color: #cfcfd8; }
 .term .tag { margin-left: 8px; padding: 1px 6px; border-radius: 3px; background: #6b4a12; color: #ffd98a; font-size: 12px; }
