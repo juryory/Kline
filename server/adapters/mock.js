@@ -86,6 +86,11 @@ export async function getIntraday(symbol) {
       volume, turnover: volume * close,
     };
   });
+  // 均价只给个股（同 server/minutes.js intradayBars）；假数据的 volume 是股、turnover = volume × 价格
+  if (symbol.type === 'stock') {
+    let amount = 0, vol = 0;
+    for (const b of bars) { amount += b.turnover; vol += b.volume; b.avg = vol ? r2(amount / vol) : null; }
+  }
   return { prevClose, bars };
 }
 

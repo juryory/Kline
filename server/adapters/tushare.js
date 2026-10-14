@@ -1,7 +1,7 @@
 // 实时直连 tushare（每次切标的都请求公网）。直播推荐用 local 适配器 + npm run sync。
 // 指数用 index_daily，同花顺板块用 ths_daily，个股用 daily（未复权）。vol 单位：手。
 import { queryAll, ymd, ymdToTs } from '../tushare-client.js';
-import { MINUTES_ENABLED, fetchMinutes, retentionStart, toBar } from '../minutes.js';
+import { MINUTES_ENABLED, fetchMinutes, retentionStart, toBar, intradayBars } from '../minutes.js';
 
 export const label = 'Tushare';
 const YEARS = 3;
@@ -59,7 +59,7 @@ async function getIntradayImpl(symbol) {
   const dayStart = new Date(last.getFullYear(), last.getMonth(), last.getDate()).getTime();
   const daily = await getDaily(symbol);
   const prev = daily.filter((b) => b.timestamp < dayStart).at(-1);
-  const bars = rows.filter((r) => r.ts >= dayStart).map((r) => toBar(r));
+  const bars = intradayBars(rows.filter((r) => r.ts >= dayStart), symbol);
   return { prevClose: prev?.close ?? bars[0].open, bars };
 }
 

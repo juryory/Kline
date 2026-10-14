@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { init, dispose } from 'klinecharts';
 import { endIndexOf, moveView, INTRADAY_POINTS } from './view.js';
-import { COLORS as C, AVP, indicatorCreate } from './indicators.js';
+import { COLORS as C, timelineCreate, indicatorCreate } from './indicators.js';
 import { drawStyles, timeToIndex, indexToTime, timeToIndexF, indexToTimeF, dragDrawable, BRUSH, BRUSH_MAX_POINTS } from './drawTools.js';
 
 const AXIS_TEXT = '#9b8a8a';
@@ -297,14 +297,15 @@ export default function KChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawTool, terminal]);
 
-  // 图形类型与指标：分时 = 面积图 + 均价线，K 线 = 蜡烛 + 导播选的主图指标（参数来自设置）
+  // 图形类型与指标：分时 = 面积图 + 均价线 / 昨收线（纵轴以昨收对称），K 线 = 蜡烛 + 导播选的主图指标（参数来自设置）
   const paramsKey = JSON.stringify(params ?? null);
+  const prevClose = intraday ? data.prevClose ?? null : null;
   useEffect(() => {
     const chart = chartRef.current;
     chart.setStyles({ candle: { type: intraday ? 'area' : 'candle_solid' } });
 
     chart.removeIndicator(CANDLE);
-    const mainDef = intraday ? AVP : indicatorCreate(main, params);
+    const mainDef = intraday ? timelineCreate(prevClose) : indicatorCreate(main, params);
     if (mainDef) chart.createIndicator(mainDef, true, { id: CANDLE });
 
     chart.removeIndicator(SUB);
@@ -313,7 +314,7 @@ export default function KChart({
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminal, scale, intraday, main, sub, subHeight, paramsKey]);
+  }, [terminal, scale, intraday, prevClose, main, sub, subHeight, paramsKey]);
 
   useEffect(render, [data, view?.bars, view?.end]);
 

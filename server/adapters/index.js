@@ -4,7 +4,7 @@
  * 每个适配器导出：
  *   label: string                       页脚显示的数据来源
  *   getDaily(symbol) => Promise<Bar[]>  日线，按时间正序
- *   getIntraday?(symbol) => Promise<{ prevClose, bars: Bar[] }>  可选，分时，1 分钟一根，Bar 需带 turnover（算均价线）
+ *   getIntraday?(symbol) => Promise<{ prevClose, bars: Bar[] }>  可选，分时，1 分钟一根；个股的 Bar 带 avg（均价线），指数不带
  *                                    不导出则导播台不显示「分时」
  *   getMinutes?(symbol, freq) => Promise<Bar[]>  可选，分钟 K，freq = 5 / 15 / 30 / 60，时间戳 = 该根结束时刻
  *                                    不导出则导播台不显示 5分 / 15分 / 30分 / 60分

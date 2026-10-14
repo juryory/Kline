@@ -150,3 +150,21 @@ export const toBar = (r, k = 1) => {
     turnover: r.amount,
   };
 };
+
+/**
+ * 分时的 K 线：最近一个交易日的 1 分钟原始行 → Bar。
+ * 个股带 avg（均价 = 累计成交额 ÷ 累计成交股数，用原始的 元 / 股 计算，不受 volume 换算成手的影响）；
+ * 指数的成交额 ÷ 成交量是全市场每股均价，不是指数点位，不给 avg（同花顺的指数分时也不画均价线）
+ */
+export function intradayBars(rows, symbol) {
+  let amount = 0, vol = 0;
+  return rows.map((r) => {
+    const bar = toBar(r);
+    if (symbol.type === 'stock') {
+      amount += r.amount;
+      vol += r.vol;
+      if (vol > 0) bar.avg = Math.round((amount / vol) * 1000) / 1000;
+    }
+    return bar;
+  });
+}

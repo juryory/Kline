@@ -3,7 +3,7 @@
 import { openDb } from '../db.js';
 import { ymdToTs } from '../tushare-client.js';
 import { computeRanking } from '../rank.js';
-import { MINUTES_ENABLED, readMinutes, toBar } from '../minutes.js';
+import { MINUTES_ENABLED, readMinutes, toBar, intradayBars } from '../minutes.js';
 
 export const label = 'Tushare';
 
@@ -90,7 +90,7 @@ async function getIntradayImpl(symbol) {
   const last = new Date(rows.at(-1).ts);
   const dayStart = new Date(last.getFullYear(), last.getMonth(), last.getDate()).getTime();
   const ymd = last.getFullYear() * 10000 + (last.getMonth() + 1) * 100 + last.getDate();
-  const bars = rows.filter((r) => r.ts >= dayStart).map((r) => toBar(r));
+  const bars = intradayBars(rows.filter((r) => r.ts >= dayStart), symbol);
   const prev = getDb().prepare('SELECT close FROM daily WHERE code = ? AND date < ? ORDER BY date DESC LIMIT 1').get(symbol.code, ymd);
   return { prevClose: prev?.close ?? bars[0].open, bars };
 }
