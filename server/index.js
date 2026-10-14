@@ -27,7 +27,7 @@ import adapter, { adapterName } from './adapters/index.js';
 import { findSymbol, defaultSymbol, loadUniverse, search, publicSymbol } from './symbols.js';
 import { getDaily, getIntraday, aggregate } from './market.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
-import { RANK_LISTS, RANK_SORTS, sortRows } from './rank.js';
+import { RANK_LISTS, RANK_SORTS, sortRows, clearRankingCache } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
 import { initSync, startSync, startSchedule, syncInfo, isSyncing, lastSyncAt } from './sync-runner.js';
 import {
@@ -514,7 +514,7 @@ setInterval(() => { if (state.period === 'T') loadData({ force: true }); }, INTR
 // 盘后定时同步（SYNC_WINDOW / SYNC_EVERY / SYNC_AT，见 server/sync-runner.js）
 initSync({
   // 同步完：重新载入标的池（新上市股票 / 新概念）并刷新画面
-  onFinish: async () => { await loadUniverse(adapter); refreshAll(); },
+  onFinish: async () => { clearRankingCache(); await loadUniverse(adapter); refreshAll(); },
   onChange: broadcastStatus,
 });
 startSchedule();

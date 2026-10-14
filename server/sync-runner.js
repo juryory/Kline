@@ -27,13 +27,17 @@ const LOG_KEEP = +(process.env.SYNC_LOG_KEEP || 500);
 const LIVE_LOG_LINES = 200;
 
 // ---------------- 各数据集的最新日期 ----------------
+// 某类板块的最新日期。逐个板块取 MAX（走主键），不要写成 daily JOIN symbols，那样会全表扫描 daily
+const latestOfCategory = (cat) =>
+  `SELECT MAX((SELECT MAX(date) FROM daily WHERE code = s.code)) AS d FROM symbols s WHERE s.category = '${cat}'`;
+
 // 排名和直播画面依赖的数据，按「同花顺概念什么时候更新」这个问题挑的
 export const DATASETS = [
   { key: 'stock', label: '个股日线', sql: "SELECT MAX(date) AS d FROM synced WHERE kind = 'daily'" },
-  { key: 'thn', label: '同花顺概念', sql: "SELECT MAX(d.date) AS d FROM daily d JOIN symbols s ON s.code = d.code WHERE s.category = 'THN'" },
-  { key: 'thi', label: '同花顺行业', sql: "SELECT MAX(d.date) AS d FROM daily d JOIN symbols s ON s.code = d.code WHERE s.category = 'THI'" },
+  { key: 'thn', label: '同花顺概念', sql: latestOfCategory('THN') },
+  { key: 'thi', label: '同花顺行业', sql: latestOfCategory('THI') },
   { key: 'thsflow', label: '概念资金流', sql: 'SELECT MAX(date) AS d FROM board_flow' },
-  { key: 'sw1', label: '申万一级', sql: "SELECT MAX(d.date) AS d FROM daily d JOIN symbols s ON s.code = d.code WHERE s.category = 'SW1'" },
+  { key: 'sw1', label: '申万一级', sql: latestOfCategory('SW1') },
   { key: 'limit', label: '涨停', sql: 'SELECT MAX(date) AS d FROM limit_up' },
   { key: 'flow', label: '个股资金流', sql: 'SELECT MAX(date) AS d FROM stock_flow' },
 ];
