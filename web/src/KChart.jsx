@@ -147,6 +147,7 @@ export default function KChart({
         },
       },
     });
+    chart.setPriceVolumePrecision(data.symbol?.type === 'etf' ? 3 : 2, 0);
     chart.applyNewData(data.bars.slice(0, endIdx + 1));
 
     const w = chart.getSize(CANDLE, 'main')?.width;

@@ -24,6 +24,7 @@ import { openDb, tx, DB_PATH } from '../server/db.js';
 import { BUILTIN_INDICES } from '../server/symbols.js';
 import { MACRO_DATASETS } from '../shared/macro.js';
 import { syncBreadth } from '../server/breadth.js';
+import { syncEtf } from '../server/etf-sync.js';
 
 // 个股（日线 + 复权因子）同步年数
 const YEARS = +(process.env.SYNC_YEARS || 3);
@@ -437,6 +438,12 @@ console.log(`[sync] 宏观数据：${macroResults.join(' · ')}`);
 const keys = Object.keys(MACRO_DATASETS);
 const dropped = db.prepare(`DELETE FROM macro WHERE dataset NOT IN (${keys.map(() => '?').join(',')})`).run(...keys).changes;
 if (dropped) console.log(`[sync] 已清理下线的宏观数据 ${dropped} 条`);
+
+// ETF 日线独立记录同步进度；没有分钟权限时仍可更新日线。
+if (process.env.SYNC_ETF !== '0') {
+  try { await syncEtf({ db, call }); }
+  catch (err) { console.warn(`[etf] ${err.message}`); failed = true; }
+}
 
 // 大盘分时的领先指标 / 红绿柱：放在最后，几千次分钟线请求，不影响前面日线、排名数据的及时性
 try {

@@ -234,6 +234,10 @@ schtasks /Create /TN "KlineSync" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 17:30 `
 
 ## 新增数据源
 
+ETF 日线默认参与 `npm run sync` 和定时同步；不配置 `SYNC_ETF` 时也会启用，显式设置 `SYNC_ETF=0` 可关闭。如果服务器沿用了旧配置中的 `SYNC_ETF=0`，请改为 `1` 并重新创建容器。首次同步会补最近三年历史，后续断点续传并增量更新，使用 `ETF_YEARS` 调整范围。也可单独运行 `npm run sync:etf`；Docker 部署使用 `docker compose exec kline npm run sync:etf`（先重新构建并启动更新后的镜像）。需要 `fund_basic` / `fund_adj` 的 2000 积分权限以及 `fund_daily` 的 5000 积分权限，不调用 8000 积分的 ETF 基础信息接口，也不请求独立收费的 ETF 分钟数据。
+
+标的从场内基金目录中按名称含 ETF、非联接基金识别，可能遗漏命名不符合此规则的标的；仅在实际取得日线后加入搜索列表，包含范围内有历史数据的已退市 ETF。日线保持原始价格、成交量（手）和成交额（千元），显示时使用基金复权因子计算前复权并保留三位小数。同步按交易日记录进度，可中断续传；最近两个交易日重查，缺复权因子的日期保持待补状态。北京时间 18 点前不将当天作为盘后更新目标。
+
 1. 在 `server/adapters/` 新建文件，导出 `label`、`getDaily(symbol)`、`getIntraday(symbol)`，可选 `listSymbols()`（接口说明见 `server/adapters/index.js`）
 2. 在 `server/adapters/index.js` 注册
 3. `.env` 中设置 `DATA_SOURCE=<名字>`

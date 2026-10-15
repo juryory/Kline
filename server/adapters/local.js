@@ -22,12 +22,13 @@ export async function getDaily(symbol) {
   if (!rows.length) throw new Error(`本地库没有 ${symbol.code} 的日线（新标的需先运行 npm run sync）`);
 
   // 前复权：价格 × 当日因子 / 最新因子。某天缺因子时沿用前一天的（当天因子可能还没发布）
-  const factors = symbol.type === 'stock'
+  const factors = ['stock', 'etf'].includes(symbol.type)
     ? d.prepare('SELECT date, factor FROM adj WHERE code = ? ORDER BY date').all(symbol.code)
     : [];
   const latest = factors.at(-1)?.factor;
   let j = 0;
-  const r2 = (v) => Math.round(v * 100) / 100;
+  const precision = symbol.type === 'etf' ? 1000 : 100;
+  const r2 = (v) => Math.round(v * precision) / precision;
 
   return rows.map((r) => {
     let k = 1;

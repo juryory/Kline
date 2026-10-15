@@ -34,6 +34,7 @@ const latestOfCategory = (cat) =>
 // 排名和直播画面依赖的数据，按「同花顺概念什么时候更新」这个问题挑的
 export const DATASETS = [
   { key: 'stock', label: '个股日线', sql: "SELECT MAX(date) AS d FROM synced WHERE kind = 'daily'" },
+  { key: 'etf', label: 'ETF日线', sql: "SELECT MAX(date) AS d FROM synced WHERE kind = 'etf_daily'" },
   { key: 'thn', label: '同花顺概念', sql: latestOfCategory('THN') },
   { key: 'thi', label: '同花顺行业', sql: latestOfCategory('THI') },
   { key: 'thsflow', label: '概念资金流', sql: 'SELECT MAX(date) AS d FROM board_flow' },

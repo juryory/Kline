@@ -54,7 +54,7 @@ export function quoteOf(data) {
   const { close, prevClose } = data.quote;
   const pct = ((close - prevClose) / prevClose) * 100;
   return {
-    close: close.toFixed(2),
+    close: close.toFixed(data.symbol?.type === 'etf' ? 3 : 2),
     pct: (pct > 0 ? '+' : '') + pct.toFixed(2) + '%',
     trend: pct > 0 ? 'up' : pct < 0 ? 'down' : '',
   };

@@ -9,6 +9,7 @@
     "build": "vite build",
     "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
     "sync": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning scripts/sync.js",
+    "sync:etf": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning scripts/sync-etf.js",
     "token": "node --env-file-if-exists=.env scripts/token.js"
   },
   "engines": {
