@@ -151,7 +151,7 @@ docker compose exec kline npm run sync              # 首次建库（约半小�
 - **数据卷** `kline-data:/data`：`market.db`（行情库，含 `-wal` / `-shm`）和 `runtime/state.json`（导播状态：设置、自选、画线）。重建容器不丢。
   - 已有本地库可以直接拷进去，省掉首次同步：先停服务 `docker compose stop`，再 `docker compose cp data/market.db kline:/data/market.db`，然后 `docker compose start`。
   - 改用宿主机目录（如 `./kline-data:/data`）时，容器以 `node` 用户（uid 1000）运行，需要先 `chown -R 1000:1000 ./kline-data`。
-- **定时同步**：`.env.docker` 里 `SYNC_WINDOW=15:30-23:30`、`SYNC_EVERY=30`、`SYNC_DAYS=1-5`，收盘后每 30 分钟后台自动同步一次，不需要宿主机计划任务。同步记录在导播台「设置 → 数据同步」，完整日志在数据卷的 `sync-logs/`。也可以手动 `docker compose exec kline npm run sync`。
+- **定时同步**：`.env.docker` 里 `SYNC_WINDOW=18:15-21:00`、`SYNC_EVERY=15`、`SYNC_DAYS=1-5`，北京时间周一至周五 18:15 开始，每 15 分钟后台同步一次，包含 21:00，共 12 个触发时刻；上一轮未结束时跳过，不并发执行。不需要宿主机计划任务。升级已有部署时也要更新 `.env.docker` 的这两项，并运行 `docker compose up -d --build` 重新创建容器。同步记录在导播台「设置 → 数据同步」，完整日志在数据卷的 `sync-logs/`。也可以手动 `docker compose exec kline npm run sync`。
 - **健康检查**：`GET /healthz`（不需要登录），镜像已配 `HEALTHCHECK`。
 - **只能跑一个实例**：导播状态和行情缓存在进程内存里，不要开多个副本。
 - **端口**只绑定 `127.0.0.1:8787`，由宝塔 Nginx 反向代理对外。宝塔给 `kline.example.com` 开 HTTPS，反向代理到 `http://127.0.0.1:8787`，配置里要有 WebSocket 和转发头：
@@ -210,8 +210,8 @@ npm start
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `SYNC_WINDOW` | `15:30-23:30` | 时间窗口 |
-| `SYNC_EVERY` | `30` | 窗口内每隔多少分钟同步一次（15:30、16:00 …）；`0` = 关闭 |
+| `SYNC_WINDOW` | `18:15-21:00` | 时间窗口，包含结束时刻 |
+| `SYNC_EVERY` | `15` | 窗口内每隔多少分钟同步一次（18:15、18:30 … 21:00）；`0` = 关闭 |
 | `SYNC_AT` | 空 | 另外再加的固定时刻，可多个，逗号分隔（如 `08:30`） |
 | `SYNC_DAYS` | `1-5` | 星期，`0`/`7` = 周日，也可写 `1,3,5` |
 | `SYNC_LOG_KEEP` | `500` | 保留最近多少份同步日志 |
