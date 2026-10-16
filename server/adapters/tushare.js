@@ -24,6 +24,7 @@ export async function listSymbols() {
 
 // 按标的选接口；各接口 vol 单位均为手
 const SOURCES = [
+  { test: (s) => s.type === 'etf', api: 'fund_daily' },
   { test: (s) => s.category?.startsWith('TH') || s.code.endsWith('.TI'), api: 'ths_daily' },
   { test: (s) => s.type === 'index', api: 'index_daily' },
   { test: () => true, api: 'daily' },

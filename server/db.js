@@ -14,7 +14,7 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS symbols (
     code TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    type TEXT NOT NULL,                -- index | stock
+    type TEXT NOT NULL,                -- index | stock | etf
     category TEXT                      -- SW1 申万一级；同花顺板块 THN 概念 / THI 行业 / THR 地域 …
   );
   -- 日线（不复权）。股票与指数共用；vol 单位：手，amount 单位：千元

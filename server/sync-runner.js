@@ -2,8 +2,8 @@
  * 盘后同步：子进程跑 scripts/sync.js（tushare → 本地库），定时触发 + 每次运行留记录
  *
  * 定时（按容器时区 TZ 计时，只在 SYNC_DAYS 指定的星期执行）
- *   SYNC_WINDOW=15:30-23:30  时间窗口
- *   SYNC_EVERY=30            窗口内每隔多少分钟同步一次（从窗口开始算：15:30、16:00、16:30 …）；0 = 关闭
+ *   SYNC_WINDOW=18:15-21:00  时间窗口（包含 21:00）
+ *   SYNC_EVERY=15            窗口内每隔多少分钟同步一次（从窗口开始算：18:15、18:30、18:45 …）；0 = 关闭
  *   SYNC_AT=09:00            另外再加的固定时刻（可多个，逗号分隔），可选
  *   SYNC_DAYS=1-5            周一到周五（0/7 = 周日；也可写 1,3,5）
  *   没有配置 TUSHARE_TOKEN 时不启用定时同步。
@@ -34,6 +34,7 @@ const latestOfCategory = (cat) =>
 // 排名和直播画面依赖的数据，按「同花顺概念什么时候更新」这个问题挑的
 export const DATASETS = [
   { key: 'stock', label: '个股日线', sql: "SELECT MAX(date) AS d FROM synced WHERE kind = 'daily'" },
+  { key: 'etf', label: 'ETF日线', sql: "SELECT MAX(date) AS d FROM synced WHERE kind = 'etf_daily'" },
   { key: 'thn', label: '同花顺概念', sql: latestOfCategory('THN') },
   { key: 'thi', label: '同花顺行业', sql: latestOfCategory('THI') },
   { key: 'thsflow', label: '概念资金流', sql: 'SELECT MAX(date) AS d FROM board_flow' },
@@ -221,8 +222,8 @@ function parseDays(spec) {
 /** 一天内要触发的时刻（分钟数，升序去重） */
 function scheduleTimes() {
   const times = new Set();
-  const every = +(process.env.SYNC_EVERY ?? 30);
-  const window = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec((process.env.SYNC_WINDOW || '15:30-23:30').trim());
+  const every = +(process.env.SYNC_EVERY ?? 15);
+  const window = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec((process.env.SYNC_WINDOW || '18:15-21:00').trim());
   if (every > 0 && window) {
     const [from, to] = [toMinutes(window[1]), toMinutes(window[2])];
     for (let t = from; t <= to; t += every) times.add(t);
@@ -240,8 +241,8 @@ const DAYS = parseDays(process.env.SYNC_DAYS || '1-5');
 function scheduleSummary() {
   if (!SCHEDULE_ENABLED) return '未开启（没有配置 TUSHARE_TOKEN）';
   if (!TIMES.length) return '未开启（SYNC_EVERY=0 且没有 SYNC_AT）';
-  const every = +(process.env.SYNC_EVERY ?? 30);
-  const window = (process.env.SYNC_WINDOW || '15:30-23:30').trim();
+  const every = +(process.env.SYNC_EVERY ?? 15);
+  const window = (process.env.SYNC_WINDOW || '18:15-21:00').trim();
   const extra = (process.env.SYNC_AT || '').trim();
   const dayText = [...DAYS].sort().map((d) => '日一二三四五六'[d]).join('');
   return `${every > 0 ? `${window} 每 ${every} 分钟` : ''}${extra ? `${every > 0 ? '，另加 ' : ''}${extra}` : ''}（周${dayText}）`;
