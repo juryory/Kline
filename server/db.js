@@ -72,7 +72,7 @@ const SCHEMA = `
     code TEXT, freq INTEGER, fetched_at INTEGER, last_ts INTEGER,
     PRIMARY KEY (code, freq)
   ) WITHOUT ROWID;
-  -- 大盘分时的领先指标 / 红绿柱（server/breadth.js 盘后计算）：market = SH / SZ / CY 或成分股指数代码，
+  -- 大盘分时的领先指标 / 红绿柱（server/breadth.js 盘后计算）：market = SH / SZ / CY / KC 或成分股指数代码，
   -- lead = 各股相对昨收涨跌幅的简单平均（小数），up / down = 上涨 / 下跌家数
   CREATE TABLE IF NOT EXISTS breadth (
     market TEXT, ts INTEGER, lead REAL, up INTEGER, down INTEGER,

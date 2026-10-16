@@ -6,21 +6,22 @@
  *           这里用涨跌家数代替，方向和节奏大体一致
  *
  * 用哪些股票算
- *   上证指数 / 深证成指 / 创业板指：整个沪市 / 深市 / 创业板（MARKET_INDEX）
+ *   上证指数 / 深证成指 / 创业板指 / 科创综指：整个沪市 / 深市 / 创业板 / 科创板（MARKET_INDEX）
  *   成分股指数（BREADTH_INDICES，默认 上证50 / 沪深300 / 中证500 / 中证1000 / 科创50 / 北证50）：
  *     各自的成分股（tushare index_weight，存 index_members 表，每 MEMBERS_TTL_DAYS 天刷新）；
  *     拿不到成分股时 科创50 退回整个科创板、北证50 退回整个北交所，其余不算
  * 只算最近一个交易日；每天算一次（synced 表 kind = SYNCED_KIND），分钟数据还没发布时留到下次同步。
  * 需要 tushare 历史分钟权限（MINUTE_MONTHS > 0）；BREADTH=0 关闭。保留最近 BREADTH_KEEP_DAYS 天（默认 30）
- * breadth 表的 market 列：市场级的用 SH / SZ / CY，成分股指数直接用指数代码
+ * breadth 表的 market 列：市场级的用 SH / SZ / CY / KC，成分股指数直接用指数代码
  */
 import { queryAll, queryPage, ymd } from './tushare-client.js';
 
-const MARKET_INDEX = { '000001.SH': 'SH', '399001.SZ': 'SZ', '399006.SZ': 'CY' };
+const MARKET_INDEX = { '000001.SH': 'SH', '399001.SZ': 'SZ', '399006.SZ': 'CY', '000680.SH': 'KC' };
 const MARKETS = {
   SH: (code) => code.endsWith('.SH'),
   SZ: (code) => code.endsWith('.SZ'),
   CY: (code) => code.endsWith('.SZ') && code.startsWith('30'),
+  KC: (code) => code.endsWith('.SH') && code.startsWith('688'), // 科创综指 = 全部科创板股票
 };
 const MEMBER_INDICES = (process.env.BREADTH_INDICES || '000016.SH,000300.SH,000905.SH,000852.SH,000688.SH,899050.BJ')
   .split(',').map((s) => s.trim()).filter(Boolean);
@@ -31,7 +32,7 @@ const FALLBACK = {
 };
 const MEMBERS_TTL_DAYS = 25;
 // 计算口径变了（加了成分股指数）就换个 kind，已算过的当天会按新口径重算一次
-const SYNCED_KIND = 'breadth2';
+const SYNCED_KIND = 'breadth3';
 
 /** 这个指数有没有领先指标 / 红绿柱（mock 也用） */
 export const hasBreadth = (code) => code in MARKET_INDEX || MEMBER_INDICES.includes(code);
