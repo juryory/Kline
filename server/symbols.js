@@ -17,6 +17,7 @@ const BUILTIN = [
   { code: '000905.SH', name: '中证500', type: 'index', mock: { endClose: 7120.4 } },
   { code: '000852.SH', name: '中证1000', type: 'index', mock: { endClose: 7480.9 } },
   { code: '000688.SH', name: '科创50', type: 'index', mock: { endClose: 1320.5 } },
+  { code: '000680.SH', name: '科创综指', type: 'index', mock: { endClose: 1480.6 } },
   { code: '899050.BJ', name: '北证50', type: 'index', mock: { endClose: 1510.2 } },
   { code: '600519.SH', name: '贵州茅台', type: 'stock', mock: { endClose: 1480.0 } },
   { code: '601318.SH', name: '中国平安', type: 'stock', mock: { endClose: 58.6 } },
