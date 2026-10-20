@@ -200,7 +200,11 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
         for (const row of response.rows) {
           const s = remote.get(row.code);
           if (!s) continue;
-          const normalized = normalizeIfind(row, kind, { ...remoteSymbol(s, mappings), allowMissingAmount: kind === 'daily' && s.type === 'index' && !!s.category });
+          // iFinD 指数/板块日线 volume 单位是手（个股/ETF 是股），按类型修正，映射文件可覆盖
+          const rmt = remoteSymbol(s, mappings);
+          const normalized = normalizeIfind(row, kind, { ...rmt,
+            volumeUnit: rmt.volumeUnit ?? (kind === 'daily' && s.type === 'index' ? 'lot' : 'share'),
+            allowMissingAmount: kind === 'daily' && s.type === 'index' && !!s.category });
           if (!normalized || normalized.date !== date) continue;
           if (kind === 'minute') {
             const hm = String(row.time).slice(11, 16);

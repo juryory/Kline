@@ -74,8 +74,12 @@ export async function getMinutes(symbol, freq) {
   const from = new Date(); from.setUTCMonth(from.getUTCMonth()-6);
   return aggregateMinutes(mergedMinutes(getDb(), symbol.code, from.getTime()), freq);
 }
-export async function getRanking(list) { return computeRanking(getDb(), list, 'merged_daily'); }
+// 板块排行 / 宏观始终读主库（tushare 同步数据）：iFinD 库只存行情，板块历史与宏观由主库提供
+import { openDb } from '../db.js';
+let mainDb;
+const getMainDb = () => mainDb ??= openDb();
+export async function getRanking(list) { return computeRanking(getMainDb(), list); }
 export async function getMacro(dataset) {
-  return getDb().prepare('SELECT period,data FROM macro WHERE dataset=? ORDER BY period').all(dataset)
+  return getMainDb().prepare('SELECT period, data FROM macro WHERE dataset = ? ORDER BY period').all(dataset)
     .map((r) => ({ ...JSON.parse(r.data), period: r.period }));
 }

@@ -8,6 +8,8 @@ export function parseIfind(result) {
   const rows = [];
   for (const t of result.tables) {
     if (!t.thscode || !Array.isArray(t.time) || !t.table || typeof t.table !== 'object') {
+      // 空表（仅 thscode，无 time/table）= 该标的当日无数据（停牌/未上市），跳过不中断
+      if (t && t.thscode && t.time == null && t.table == null) continue;
       throw new Error('iFinD 返回格式异常：缺少 thscode / time / table');
     }
     for (let i = 0; i < t.time.length; i++) {
