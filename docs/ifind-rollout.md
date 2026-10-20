@@ -91,6 +91,9 @@ docker compose exec kline npm run sync:ifind
   已有记录（盘后同步写过的、停牌 / 未上市返回空的）不再请求。中断、重启都从断点继续。
 - 同时补同期 iFinD 日线（不复用 Tushare，约 7 数据量 / 标的日，全部不到 100 万）：Tushare 深证成指、创业板指的成交额只算成分股，
   和 iFinD 口径不同，核对要用同一来源。
+- 核心指数还会先补 `IFIND_HISTORY_YEARS`（默认 5）年 iFinD 日线（每年一次请求，6 数据量 / 标的日，共不到 10 万），
+  图上这几年的成交额统一用 iFinD 口径，深证成指、创业板指不会在切换处跳 2—3 倍；更早的仍用 Tushare。
+  写入前收盘价和 Tushare 核对，一次请求里不一致 ≥5 天且超过 2% 时不写入并暂停。
 - 核对：每个写入的完整交易日，15:00 收盘价、成交额、成交量汇总都和 iFinD 日线比（没有 iFinD 日线时只比收盘）。
   不一致记入 `ifind_backfill_issues`；同一批不一致 ≥5 天且超过 2% 时暂停，设置页显示原因。
   查明后运行 `npm run sync:ifind -- --backfill --resume` 清掉暂停和记录继续。

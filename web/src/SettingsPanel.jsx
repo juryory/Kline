@@ -52,7 +52,9 @@ function BackfillNote({ info }) {
       {!info.running && info.finishedAt && ` · 上一轮 ${fmtTime(info.finishedAt)}${info.exitCode === 0 ? '' : ' 失败'}`}
       {info.official && ` · 官方本周已用 ${wan(info.official.usage)} / ${wan(info.official.limit)}`}
       {s && <>
-        <br />{s.start} 起 {s.days} 个交易日：
+        {s.coreDaily && <><br />核心指数 {s.coreDaily.years} 年日线（{s.coreDaily.start} 起）：{s.coreDaily.done >= s.coreDaily.total ? '已补完'
+          : `${Math.floor(s.coreDaily.done / s.coreDaily.total * 100)}%`}</>}
+        <br />分钟 {s.start} 起 {s.days} 个交易日：
         {s.batches.map((b) => `${b.label} ${b.pending ? '未开始' : `${b.total ? Math.floor(b.done / b.total * 100) : 100}%（${b.codes} 个）`}`).join(' · ')}
         {s.remainingCells > 0 ? `；剩余约 ${wan(s.remainingCells)} 数据量，约 ${weeks} 周` : '；已全部补完'}
         {s.noMinute > 0 && `；${s.noMinute} 个指数没有分钟数据，已跳过`}

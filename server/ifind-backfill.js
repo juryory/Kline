@@ -1,4 +1,5 @@
 // 分钟历史补全：按批次（核心指数 → 同花顺概念 → 行业 / 申万一级 → 活跃 ETF）补最近 IFIND_BACKFILL_MONTHS 个月。
+// 核心指数先补 IFIND_HISTORY_YEARS 年 iFinD 日线，替换 Tushare 历史（深证成指等的成交额口径前后一致）。
 // 批内从最近的日期往前，每次请求 BATCH_CODES 个标的 × 至多 CHUNK_DAYS 个交易日。
 // 额度两道闸：本机周账本的补历史上限（IFIND_BACKFILL_WEEKLY），以及官方统计的本周用量停止线（含其他终端）。
 // 每个写入的完整交易日都和 iFinD 日线核对（15:00 收盘价、全天成交额和成交量），不一致的记入 ifind_backfill_issues，
@@ -9,6 +10,7 @@ import { chinaDate, dateNumber, normalizeIfind } from './ifind-client.js';
 import { quotaConfig, reserveWeekly, reconcileWeekly } from './ifind-budget.js';
 import { initIfind, writeIfind, noMinuteCodes, flagNoMinute } from './ifind-store.js';
 import { syncIfind, syncUniverse, completeMinuteDay, loadMappings, remoteSymbol } from './ifind-sync.js';
+import { isIfindDomestic } from '../shared/periods.js';
 
 export const BACKFILL_BATCHES = [
   { key: 'core', label: '核心指数' },
@@ -21,6 +23,8 @@ const BATCH_CODES = 5;
 const BARS = 241; // 09:30—11:30、13:01—15:00
 const CELLS_PER_DAY = BARS * 6;
 const OFFICIAL_RECHECK_MS = 5 * 60_000;
+const DAILY_CHUNK_DAYS = 250; // 核心指数日线每次请求约一年
+const DAILY_CELLS = 6;
 
 export function backfillConfig({ drain = false, env = process.env } = {}) {
   const num = (key, def) => Number(env[key] || def);
@@ -30,8 +34,10 @@ export function backfillConfig({ drain = false, env = process.env } = {}) {
     weekly: num('IFIND_BACKFILL_WEEKLY', 50_000_000),
     stop: drain ? num('IFIND_BACKFILL_DRAIN_STOP', 145_000_000) : num('IFIND_BACKFILL_STOP', 100_000_000),
     etfTop: num('IFIND_BACKFILL_ETF_TOP', 300),
+    dailyYears: num('IFIND_HISTORY_YEARS', 5),
   };
   if (!Number.isInteger(cfg.months) || cfg.months < 1 || cfg.months > 12) throw new Error('IFIND_BACKFILL_MONTHS 必须为 1—12');
+  if (!Number.isInteger(cfg.dailyYears) || cfg.dailyYears < 1 || cfg.dailyYears > 100) throw new Error('IFIND_HISTORY_YEARS 必须为 1—100 年');
   if (!(cfg.stop > 0 && cfg.stop < quota.total)) throw new Error('补历史停止线必须小于 IFIND_WEEKLY_BUDGET');
   // 补满：放开本机补历史上限，只留 总额 − 停止线 作为保留额度；平时用 IFIND_BACKFILL_WEEKLY
   cfg.quota = drain ? { ...quota, reserve: quota.total - cfg.stop, history: cfg.stop }
@@ -53,6 +59,13 @@ export function backfillStart(now, months) {
   const d = new Date(now + 8 * 3600_000); d.setUTCMonth(d.getUTCMonth() - months);
   return d.toISOString().slice(0, 10);
 }
+/** 核心指数日线起点：IFIND_HISTORY_YEARS 年前 */
+export function dailyStart(now, years) {
+  const d = new Date(now + 8 * 3600_000); d.setUTCFullYear(d.getUTCFullYear() - years);
+  return d.toISOString().slice(0, 10);
+}
+/** 交易日历从这天取起（分钟、日线两个起点中更早的） */
+export const calendarStart = (now, cfg) => [backfillStart(now, cfg.months), dailyStart(now, cfg.dailyYears)].sort()[0];
 
 const meta = (db, key) => { const v = db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value; return v ? JSON.parse(v) : null; };
 const setMeta = (db, key, value) => db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run(key, JSON.stringify(value));
@@ -87,7 +100,8 @@ function activeEtfs(db, top, now) {
 export function batchSymbols(db, key, { now = Date.now(), etfTop = 300, stored = false } = {}) {
   const skip = noMinuteCodes(db, now);
   const all = new Map(db.prepare('SELECT * FROM symbols').all().map((s) => [s.code, s]));
-  const pick = (codes) => [...new Set(codes)].map((c) => all.get(c)).filter((s) => s && !skip.has(s.code));
+  // iFinD 不支持的代码（如中证 932000.CSI）不请求
+  const pick = (codes) => [...new Set(codes)].map((c) => all.get(c)).filter((s) => s && !skip.has(s.code) && isIfindDomestic(s));
   if (key === 'core') {
     const builtin = [...BUILTIN_INDICES.map((s) => s.code), '883418.TI'];
     return pick([...builtin, ...[...all.values()].filter((s) => s.type === 'index' && !s.category).map((s) => s.code).sort()]);
@@ -138,6 +152,18 @@ export function backfillStatus(db, { now = Date.now(), env = process.env } = {})
   if (!cal) return null;
   const days = cal.dates.filter((d) => d >= start && d < today);
   if (!days.length) return null;
+  // 核心指数日线：日历还没取到那么早时（升级后第一轮之前）不显示
+  const yearsFrom = dailyStart(now, cfg.dailyYears);
+  let coreDaily = null;
+  if (cal.start <= yearsFrom) {
+    const dailyDays = cal.dates.filter((d) => d >= yearsFrom && d < today);
+    const [a, b] = [dateNumber(dailyDays[0]), dateNumber(dailyDays.at(-1))];
+    const have = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT date FROM ifind_progress WHERE kind='daily' AND code=? AND date BETWEEN ? AND ?
+      UNION SELECT date FROM ifind_daily WHERE code=? AND date BETWEEN ? AND ?)`);
+    const codes = batchSymbols(db, 'core', { now }).map((s) => s.code);
+    coreDaily = { years: cfg.dailyYears, start: dailyDays[0], codes: codes.length, total: codes.length * dailyDays.length,
+      done: codes.reduce((n, c) => n + Math.min(dailyDays.length, have.get(c, a, b, c, a, b).n), 0) };
+  }
   const from = dateNumber(days[0]), to = dateNumber(days.at(-1));
   const count = db.prepare("SELECT COUNT(*) AS n FROM ifind_progress WHERE kind='minute' AND code=? AND date BETWEEN ? AND ?");
   let remaining = 0;
@@ -150,8 +176,8 @@ export function backfillStatus(db, { now = Date.now(), env = process.env } = {})
     remaining += total - done;
     return { key, label, codes: codes.length, total, done, pending: key === 'etf' && !codes.length };
   });
-  return { start: days[0], end: days.at(-1), days: days.length, batches,
-    remainingCells: remaining * CELLS_PER_DAY, paused: meta(db, 'ifind_backfill_paused'),
+  return { start: days[0], end: days.at(-1), days: days.length, batches, coreDaily,
+    remainingCells: remaining * CELLS_PER_DAY + (coreDaily ? (coreDaily.total - coreDaily.done) * DAILY_CELLS : 0), paused: meta(db, 'ifind_backfill_paused'),
     issues: db.prepare('SELECT COUNT(*) AS n FROM ifind_backfill_issues').get().n,
     noMinute: noMinuteCodes(db, now).size, ...cfg, quota: undefined };
 }
@@ -167,10 +193,11 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
   const clock = () => now + Date.now() - wallStart;
   initIfind(db);
   const cfg = backfillConfig({ drain, env });
-  const result = { stop: null, requests: 0, cells: 0, minuteRows: 0, checked: 0, issues: 0, failed: false, errors: [] };
+  const result = { stop: null, requests: 0, cells: 0, dailyRows: 0, minuteRows: 0, checked: 0, issues: 0, failed: false, errors: [] };
   const finish = (stop) => {
     result.stop = stop;
     log(`[backfill] 本轮结束（${STOP_TEXT[stop] ?? stop}）：请求 ${result.requests} 次，数据量 ${result.cells}，`
+      + (result.dailyRows ? `写入 ${result.dailyRows} 根核心指数日线，` : '')
       + `写入 ${result.minuteRows} 根分钟线，核对 ${result.checked} 天、不一致 ${result.issues} 天`
       + (result.errors.length ? `；${result.errors.join('；')}` : ''));
     return result;
@@ -207,7 +234,9 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
     AND (SELECT COUNT(*) FROM ifind_progress p WHERE p.kind='minute' AND p.code=s.code) >= 3
     AND NOT EXISTS (SELECT 1 FROM ifind_minute m WHERE m.code=s.code)`).run(clock());
   const start = backfillStart(now, cfg.months), today = chinaDate(now);
-  const days = (await tradingCalendar(db, client, start, now)).filter((d) => d < today).reverse(); // 新 → 旧
+  const calendar = (await tradingCalendar(db, client, calendarStart(now, cfg), now)).filter((d) => d < today).reverse(); // 新 → 旧
+  const days = calendar.filter((d) => d >= start);
+  const dailyDays = calendar.filter((d) => d >= dailyStart(now, cfg.dailyYears));
   const tradingDays = new Set(days);
   const progress = db.prepare("SELECT date FROM ifind_progress WHERE kind='minute' AND code=? AND date BETWEEN ? AND ?");
   const mark = db.prepare('INSERT OR REPLACE INTO ifind_progress VALUES (?,?,?,?,?)');
@@ -216,6 +245,112 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
   const dailyBar = (code, date) => ifindBar.get(code, date) ?? legacyBar.get(code, date);
   const putIssue = db.prepare('INSERT OR REPLACE INTO ifind_backfill_issues VALUES (?,?,?,?)');
   const outOfTime = () => Date.now() - wallStart >= maxSeconds * 1000;
+  const pause = (reason) => {
+    setMeta(db, 'ifind_backfill_paused', { reason, at: clock() });
+    result.failed = true; result.errors.push(reason);
+    return 'paused';
+  };
+
+  // 两道额度闸 → 请求 → 按 dataVol 校正本机账本。返回 { response }；额度不够或接口异常时返回 { stop }
+  async function request(kind, estimate, what, call) {
+    if (Date.now() - officialAt >= OFFICIAL_RECHECK_MS) {
+      try { await refreshOfficial(); } catch (err) { result.errors.push(err.message); return { stop: 'error' }; }
+    }
+    if (official + cellsSince + estimate > cfg.stop) return { stop: 'official' };
+    let week;
+    try { week = reserveWeekly(db, clock(), 'history', kind, estimate, cfg.quota); }
+    catch (err) { result.errors.push(err.message); return { stop: 'budget' }; }
+    let response;
+    try {
+      result.requests++;
+      response = await call();
+      reconcileWeekly(db, week, 'history', kind, estimate, response.cells);
+    } catch (err) {
+      result.failed = true; result.errors.push(`${what}：${err.message}`);
+      return { stop: 'error' };
+    }
+    const used = Number.isFinite(response.cells) ? response.cells : estimate;
+    result.cells += used; cellsSince += used;
+    return { response };
+  }
+
+  /**
+   * 核心指数 IFIND_HISTORY_YEARS 年 iFinD 日线，替换 Tushare 历史：Tushare 深证成指、创业板指等的成交额只算成分股，
+   * 和 iFinD 口径不同，切换处成交额会跳 2—3 倍。收盘价和 Tushare 核对，一次请求里不一致过多时不写入、暂停。
+   * 返回停止原因；补完返回 null
+   */
+  async function coreDaily(symbols) {
+    if (!dailyDays.length) return null;
+    const from = dateNumber(dailyDays.at(-1));
+    const have = db.prepare(`SELECT date FROM ifind_progress WHERE kind='daily' AND code=? AND date>=?
+      UNION SELECT date FROM ifind_daily WHERE code=? AND date>=?`);
+    const legacyClose = db.prepare('SELECT close FROM daily WHERE code=? AND date=?');
+    const missing = new Map(symbols.map((s) => {
+      const got = new Set(have.all(s.code, from, s.code, from).map((r) => r.date));
+      return [s.code, new Set(dailyDays.filter((d) => !got.has(dateNumber(d))))];
+    }));
+    if (![...missing.values()].some((m) => m.size)) return null;
+    for (let c = 0; c < dailyDays.length; c += DAILY_CHUNK_DAYS) {
+      const chunk = dailyDays.slice(c, c + DAILY_CHUNK_DAYS);
+      const groups = new Map();
+      for (const s of symbols) {
+        const miss = chunk.filter((d) => missing.get(s.code).has(d));
+        if (!miss.length) continue;
+        const span = `${miss.at(-1)}|${miss[0]}`;
+        if (!groups.has(span)) groups.set(span, []);
+        groups.get(span).push(s);
+      }
+      for (const [span, list] of groups) {
+        if (shouldStop()) return 'interrupted';
+        if (outOfTime()) return 'time';
+        const [first, last] = span.split('|');
+        const spanDays = chunk.filter((d) => d >= first && d <= last);
+        const remote = new Map(list.map((s) => [remoteSymbol(s, mappings).code, s]));
+        const { response, stop } = await request('daily', list.length * spanDays.length * DAILY_CELLS,
+          `核心指数日线 ${first}—${last}`, () => client.dailyRange([...remote.keys()], first, last));
+        if (stop) return stop;
+        const got = new Map(), issues = [];
+        let compared = 0;
+        for (const row of response.rows) {
+          const s = remote.get(row.code);
+          if (!s) continue;
+          const rmt = remoteSymbol(s, mappings);
+          // 指数日线成交量单位是手，和盘后同步一致
+          const bar = normalizeIfind(row, 'daily', { ...rmt, volumeUnit: rmt.volumeUnit ?? 'lot', allowMissingAmount: !!s.category });
+          const day = bar && chinaDate(bar.ts);
+          if (!bar || !missing.get(s.code).has(day) || !spanDays.includes(day)) continue;
+          if (!got.has(s.code)) got.set(s.code, new Map());
+          got.get(s.code).set(day, bar);
+          const old = legacyClose.get(s.code, bar.date);
+          if (!old) continue;
+          compared++;
+          if (Math.abs(bar.close - old.close) > Math.max(0.0015, old.close * 0.0005)) {
+            issues.push([s.code, bar.date, `日线收盘 iFinD ${bar.close} / Tushare ${old.close}`]);
+          }
+        }
+        if (issues.length >= 5 && issues.length > compared * 0.02) {
+          for (const [code, date, detail] of issues) putIssue.run(code, date, detail, clock());
+          return pause(`核心指数日线 ${first}—${last} 收盘和 Tushare 不一致 ${issues.length} / ${compared} 天，未写入（详见 ifind_backfill_issues）`);
+        }
+        tx(db, () => {
+          for (const s of list) for (const day of spanDays) {
+            if (!missing.get(s.code).has(day)) continue;
+            const bar = got.get(s.code)?.get(day);
+            // 没有返回的（指数发布前、停牌）记为已尝试，这些天照旧用 Tushare
+            if (bar) writeIfind(db, 'daily', s.code, [bar]);
+            mark.run('daily', s.code, dateNumber(day), bar ? 1 : 0, clock());
+            if (bar) result.dailyRows++;
+          }
+          for (const [code, date, detail] of issues) putIssue.run(code, date, detail, clock());
+        });
+        result.issues += issues.length;
+        for (const [code, date, detail] of issues) log(`[backfill] 核对不一致：${code} ${date} ${detail}`);
+        log(`[backfill] 核心指数日线 ${first}—${last}：${list.length} 个标的，累计写入 ${result.dailyRows} 根`);
+      }
+    }
+    log(`[backfill] 核心指数 ${cfg.dailyYears} 年日线已补完（${dailyDays.at(-1)} 起）`);
+    return null;
+  }
 
   // IFIND_SYMBOLS：只补指定代码（上线前小样本验证）
   const only = env.IFIND_SYMBOLS?.split(',').map((s) => s.trim()).filter(Boolean);
@@ -223,6 +358,10 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
     let symbols = batchSymbols(db, key, { now, etfTop: cfg.etfTop });
     if (only?.length) symbols = symbols.filter((s) => only.includes(s.code));
     if (!symbols.length) continue;
+    if (key === 'core') {
+      const stop = await coreDaily(symbols);
+      if (stop) return finish(stop);
+    }
     // 同期 iFinD 日线（不复用 Tushare，口径和分钟一致才能核对）：每个标的日 7 个数据量
     const daily = await syncIfind({ db, client, now: clock(), log: () => {}, mode: 'history', kinds: ['daily'], symbols,
       dailyStartDate: start, tradingDays, reuseLegacy: false, quota: cfg.quota, mappings,
@@ -256,26 +395,10 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
           if (shouldStop()) return finish('interrupted');
           if (outOfTime()) return finish('time');
           const batch = list.slice(i, i + BATCH_CODES);
-          const estimate = batch.length * spanDays.length * CELLS_PER_DAY;
-          if (Date.now() - officialAt >= OFFICIAL_RECHECK_MS) {
-            try { await refreshOfficial(); } catch (err) { result.errors.push(err.message); return finish('error'); }
-          }
-          if (official + cellsSince + estimate > cfg.stop) return finish('official');
-          let week;
-          try { week = reserveWeekly(db, clock(), 'history', 'minute', estimate, cfg.quota); }
-          catch (err) { result.errors.push(err.message); return finish('budget'); }
           const remote = new Map(batch.map((s) => [remoteSymbol(s, mappings).code, s]));
-          let response;
-          try {
-            result.requests++;
-            response = await client.minuteRange([...remote.keys()], first, last);
-            reconcileWeekly(db, week, 'history', 'minute', estimate, response.cells);
-          } catch (err) {
-            result.failed = true; result.errors.push(`${label} ${first}—${last}：${err.message}`);
-            return finish('error');
-          }
-          const used = Number.isFinite(response.cells) ? response.cells : estimate;
-          result.cells += used; cellsSince += used;
+          const { response, stop } = await request('minute', batch.length * spanDays.length * CELLS_PER_DAY,
+            `${label} ${first}—${last}`, () => client.minuteRange([...remote.keys()], first, last));
+          if (stop) return finish(stop);
           // 代码 → 日期 → 时间戳 → 分钟
           const got = new Map();
           for (const row of response.rows) {
@@ -318,10 +441,7 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
           for (const text of issues) log(`[backfill] 核对不一致：${text}`);
           // 整批不一致过多（不是个别停牌 / 数据源修订），多半是单位或代码问题：暂停，等人工确认
           if (batchIssues >= 5 && batchIssues > batchChecked * 0.02) {
-            const reason = `${label} 核对不一致 ${batchIssues} / ${batchChecked} 天（详见 ifind_backfill_issues）`;
-            setMeta(db, 'ifind_backfill_paused', { reason, at: clock() });
-            result.failed = true; result.errors.push(reason);
-            return finish('paused');
+            return finish(pause(`${label} 核对不一致 ${batchIssues} / ${batchChecked} 天（详见 ifind_backfill_issues）`));
           }
         }
       }

@@ -93,6 +93,12 @@ export function createIfindClient({ fetchImpl = fetch, refreshToken = process.en
         functionpara: { Interval: '1', CPS: 'no', Fill: 'Original', Timeformat: 'BeiJingTime' } });
       return { rows: parseIfind(result), cells: result.dataVol == null || result.dataVol === '' ? NaN : Number(result.dataVol) };
     },
+    /** 多天日线（补历史用）：不带涨跌停状态，每个标的日 6 个数据量 */
+    async dailyRange(codes, startdate, enddate) {
+      const result = await post('cmd_history_quotation', { access_token: await ensureToken() }, { codes: codes.join(','),
+        indicators: FIELDS, startdate, enddate, functionpara: { Interval: 'D', CPS: '1', Fill: 'Omit' } });
+      return { rows: parseIfind(result), cells: result.dataVol == null || result.dataVol === '' ? NaN : Number(result.dataVol) };
+    },
     /** 官方统计的本周行情用量 { usage, limit }（含其他终端），不消耗额度 */
     async dataVolume() {
       const result = await post('get_data_volume', { access_token: await ensureToken() }, {});

@@ -4,7 +4,7 @@ import { openIfindDb, IFIND_DB_PATH } from '../server/ifind-db.js';
 import { syncIfind } from '../server/ifind-sync.js';
 import { syncIfindMacro } from '../server/ifind-macro.js';
 import { refreshConceptBoards } from '../server/ifind-boards.js';
-import { runBackfill, backfillStatus, backfillConfig, backfillStart, tradingCalendar } from '../server/ifind-backfill.js';
+import { runBackfill, backfillStatus, backfillConfig, calendarStart, tradingCalendar } from '../server/ifind-backfill.js';
 import { createIfindClient } from '../server/ifind-client.js';
 import { ifindConfigured } from '../server/source-config.js';
 
@@ -33,9 +33,11 @@ try {
     // --backfill：分钟历史按批次补（定时任务每轮 10 分钟）；--drain 补满到官方停止线，不限时；--resume 核对暂停后继续
     if (dryRun) {
       // 只查交易日历和官方用量（都不耗额度），打印各批进度
-      await tradingCalendar(db, client, backfillStart(Date.now(), backfillConfig().months), Date.now());
+      await tradingCalendar(db, client, calendarStart(Date.now(), backfillConfig()), Date.now());
       const status = backfillStatus(db);
       if (status) {
+        const d = status.coreDaily;
+        if (d) console.log(`[backfill] 核心指数 ${d.years} 年日线（${d.start} 起）：${d.codes} 个标的，${d.done}/${d.total} 标的日`);
         for (const b of status.batches) console.log(`[backfill] ${b.label}：${b.codes} 个标的，${b.done}/${b.total} 标的日`);
         console.log(`[backfill] ${status.start}—${status.end} ${status.days} 个交易日，剩余约 ${status.remainingCells.toLocaleString()} 数据量`
           + (status.paused ? `；已暂停：${status.paused.reason}` : ''));
