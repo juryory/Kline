@@ -35,6 +35,8 @@ export function backfillConfig({ drain = false, env = process.env } = {}) {
     stop: drain ? num('IFIND_BACKFILL_DRAIN_STOP', 145_000_000) : num('IFIND_BACKFILL_STOP', 100_000_000),
     etfTop: num('IFIND_BACKFILL_ETF_TOP', 300),
     dailyYears: num('IFIND_HISTORY_YEARS', 5),
+    // 这几个核心指数的 iFinD 日线补全历史（旧库有的每一天），不止 IFIND_HISTORY_YEARS 年；设为空不补
+    fullHistory: (env.IFIND_FULL_HISTORY ?? '399001.SZ,399006.SZ').split(',').map((s) => s.trim()).filter(Boolean),
   };
   if (!Number.isInteger(cfg.months) || cfg.months < 1 || cfg.months > 12) throw new Error('IFIND_BACKFILL_MONTHS 必须为 1—12');
   if (!Number.isInteger(cfg.dailyYears) || cfg.dailyYears < 1 || cfg.dailyYears > 100) throw new Error('IFIND_HISTORY_YEARS 必须为 1—100 年');
@@ -163,6 +165,14 @@ export function backfillStatus(db, { now = Date.now(), env = process.env } = {})
     const codes = batchSymbols(db, 'core', { now }).map((s) => s.code);
     coreDaily = { years: cfg.dailyYears, start: dailyDays[0], codes: codes.length, total: codes.length * dailyDays.length,
       done: codes.reduce((n, c) => n + Math.min(dailyDays.length, have.get(c, a, b, c, a, b).n), 0) };
+    // 全历史的指数：更早的部分按旧库已有的日期算
+    const older = db.prepare(`SELECT COUNT(*) AS n, SUM(EXISTS (SELECT 1 FROM ifind_progress p WHERE p.kind='daily' AND p.code=d.code AND p.date=d.date)
+      OR EXISTS (SELECT 1 FROM ifind_daily i WHERE i.code=d.code AND i.date=d.date)) AS done FROM daily d WHERE code=? AND date<?`);
+    coreDaily.fullHistory = cfg.fullHistory.filter((c) => codes.includes(c));
+    for (const c of coreDaily.fullHistory) {
+      const r = older.get(c, a);
+      coreDaily.total += r.n; coreDaily.done += r.done ?? 0;
+    }
   }
   const from = dateNumber(days[0]), to = dateNumber(days.at(-1));
   const count = db.prepare("SELECT COUNT(*) AS n FROM ifind_progress WHERE kind='minute' AND code=? AND date BETWEEN ? AND ?");
@@ -282,16 +292,21 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
   async function coreDaily(symbols) {
     if (!dailyDays.length) return null;
     const from = dateNumber(dailyDays.at(-1));
-    const have = db.prepare(`SELECT date FROM ifind_progress WHERE kind='daily' AND code=? AND date>=?
-      UNION SELECT date FROM ifind_daily WHERE code=? AND date>=?`);
+    const have = db.prepare(`SELECT date FROM ifind_progress WHERE kind='daily' AND code=?
+      UNION SELECT date FROM ifind_daily WHERE code=?`);
     const legacyClose = db.prepare('SELECT close FROM daily WHERE code=? AND date=?');
+    // 全历史的指数：更早的交易日取旧库已有的日期（不用再取几十年的交易日历）
+    const older = db.prepare('SELECT date FROM daily WHERE code=? AND date<? ORDER BY date DESC');
+    const iso = (n) => String(n).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
     const missing = new Map(symbols.map((s) => {
-      const got = new Set(have.all(s.code, from, s.code, from).map((r) => r.date));
-      return [s.code, new Set(dailyDays.filter((d) => !got.has(dateNumber(d))))];
+      const got = new Set(have.all(s.code, s.code).map((r) => r.date));
+      const wanted = cfg.fullHistory.includes(s.code) ? [...dailyDays, ...older.all(s.code, from).map((r) => iso(r.date))] : dailyDays;
+      return [s.code, new Set(wanted.filter((d) => !got.has(dateNumber(d))))];
     }));
     if (![...missing.values()].some((m) => m.size)) return null;
-    for (let c = 0; c < dailyDays.length; c += DAILY_CHUNK_DAYS) {
-      const chunk = dailyDays.slice(c, c + DAILY_CHUNK_DAYS);
+    const allDays = [...new Set([...missing.values()].flatMap((m) => [...m]))].sort().reverse(); // 新 → 旧
+    for (let c = 0; c < allDays.length; c += DAILY_CHUNK_DAYS) {
+      const chunk = allDays.slice(c, c + DAILY_CHUNK_DAYS);
       const groups = new Map();
       for (const s of symbols) {
         const miss = chunk.filter((d) => missing.get(s.code).has(d));
@@ -348,7 +363,8 @@ export async function runBackfill({ db, client, now = Date.now(), log = console.
         log(`[backfill] 核心指数日线 ${first}—${last}：${list.length} 个标的，累计写入 ${result.dailyRows} 根`);
       }
     }
-    log(`[backfill] 核心指数 ${cfg.dailyYears} 年日线已补完（${dailyDays.at(-1)} 起）`);
+    const full = symbols.filter((s) => cfg.fullHistory.includes(s.code)).map((s) => s.name);
+    log(`[backfill] 核心指数 ${cfg.dailyYears} 年日线已补完（${dailyDays.at(-1)} 起${full.length ? `；${full.join('、')} 全历史` : ''}）`);
     return null;
   }
 

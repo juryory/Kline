@@ -43,7 +43,7 @@ function fakeClient({ usage = 0, close = 10 } = {}) {
   return { calls, dailyCalls,
     dailyRange: async (codes, from, to) => {
       dailyCalls.push([codes.join(','), from, to]);
-      const rows = codes.flatMap((code) => DAYS.filter((d) => d >= from && d <= to).map((time) =>
+      const rows = codes.flatMap((code) => ['2026-10-14', '2026-10-15', ...DAYS].filter((d) => d >= from && d <= to).map((time) =>
         ({ code, time, open: 10, high: 10, low: 10, close: 10, volume: 241, amount: 241000 })));
       return { rows, cells: rows.length * 6 };
     },
@@ -84,16 +84,17 @@ test('分钟补历史：按批次推进，无分钟数据的指数记下跳过�
   assert.equal(client.calls.length, 0); assert.equal(client.dailyCalls.length, 0);
 });
 
-test('核心指数 5 年 iFinD 日线：一次请求多天，收盘和 Tushare 核对，补完不再请求；大量不一致时不写入、暂停', async (t) => {
+test('核心指数 5 年 iFinD 日线、深证成指全历史：一次请求多天，收盘和 Tushare 核对，补完不再请求；大量不一致时不写入、暂停', async (t) => {
   const db = database(t), client = fakeClient();
-  db.prepare('INSERT INTO daily VALUES (?,?,10,10,10,10,100,?)').run('399001.SZ', 20261016, 100);
+  // 深证成指全历史：5 年以前（这里是 10-16 以前）旧库有的日期也换成 iFinD
+  for (const d of [20261014, 20261015, 20261016]) db.prepare('INSERT INTO daily VALUES (?,?,10,10,10,10,100,?)').run('399001.SZ', d, 100);
   const result = await runBackfill({ db, client, now, env, log: () => {}, mappings: {} });
-  assert.equal(result.stop, 'done'); assert.equal(result.dailyRows, 6);
+  assert.equal(result.stop, 'done'); assert.equal(result.dailyRows, 8);
   // 只有核心指数走多天日线；Tushare 已有的那天也换成 iFinD（成交额口径）
-  assert.deepEqual(client.dailyCalls, [['000001.SH,399001.SZ', '2026-10-16', '2026-10-20']]);
+  assert.deepEqual(client.dailyCalls, [['000001.SH', '2026-10-16', '2026-10-20'], ['399001.SZ', '2026-10-14', '2026-10-20']]);
   assert.equal(db.prepare("SELECT amount FROM ifind_daily WHERE code='399001.SZ' AND date=20261016").get().amount, 241);
   const status = backfillStatus(db, { now, env });
-  assert.deepEqual([status.coreDaily.codes, status.coreDaily.done, status.coreDaily.total], [2, 6, 6]);
+  assert.deepEqual([status.coreDaily.codes, status.coreDaily.done, status.coreDaily.total], [2, 8, 8]);
 
   const db2 = database(t), bad = fakeClient();
   for (const code of ['000001.SH', '399001.SZ']) for (const d of [20261016, 20261019, 20261020]) {
