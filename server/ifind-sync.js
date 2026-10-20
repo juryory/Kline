@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { BUILTIN_INDICES } from './symbols.js';
 import { tx } from './db.js';
-import { initIfind, writeIfind } from './ifind-store.js';
+import { initIfind, writeIfind, noMinuteCodes, flagNoMinute } from './ifind-store.js';
 import { createIfindClient, chinaDate, dateNumber, normalizeIfind, LIMIT_FIELD } from './ifind-client.js';
 import { quotaConfig, reserveWeekly, reconcileWeekly, validateQuota } from './ifind-budget.js';
 import { isIfindDomestic } from '../shared/periods.js';
@@ -18,7 +18,7 @@ export function loadExtraSymbols(file = process.env.IFIND_UNIVERSE_FILE) {
   }
   return enabled;
 }
-function completeMinuteDay(rows, day) {
+export function completeMinuteDay(rows, day) {
   const times = new Set(rows.map(r => r.ts));
   for (const session of ['09:31:00', '13:01:00']) {
     const from = Date.parse(`${day}T${session}+08:00`);
@@ -38,6 +38,8 @@ export function loadMappings(file = process.env.IFIND_CODE_MAP_FILE) {
 }
 export function remoteSymbol(symbol, mappings) {
   // 未经核实不推断供应商后缀；不同代码通过显式映射配置。
+  // 申万一级：Tushare 801xxx.SI = iFinD 801xxx.SL（已核对收盘、成交量、成交额一致）
+  if (!mappings[symbol.code] && /^801\d{3}\.SI$/.test(symbol.code)) return { code: symbol.code.replace(/SI$/, 'SL') };
   return mappings[symbol.code] ?? { code: symbol.code };
 }
 export function syncUniverse(db) {
@@ -73,7 +75,7 @@ function datesBetween(from, to) {
 export async function syncIfind({ db, client = createIfindClient(), now = Date.now(), log = console.log,
   startDate = process.env.IFIND_START_DATE, endDate = process.env.IFIND_END_DATE,
   dailyStartDate = process.env.IFIND_DAILY_START_DATE, minuteStartDate = process.env.IFIND_MINUTE_START_DATE,
-  symbols, mappings = loadMappings(), dryRun = false,
+  symbols, mappings = loadMappings(), dryRun = false, kinds = ['daily', 'minute'], tradingDays, reuseLegacy = true,
   mode = 'daily', quota = quotaConfig(), maxRequests = Number(process.env.IFIND_MAX_REQUESTS || 2000),
   maxSeconds = Number(process.env.IFIND_MAX_SECONDS || 600),
   budgets = { daily: Number(process.env.IFIND_DAILY_BUDGET || 900000), minute: Number(process.env.IFIND_MINUTE_BUDGET || 1400000) },
@@ -118,7 +120,7 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
     if (kind === 'daily' && starts[kind] < earliestDaily) throw new Error('日线起点超出 IFIND_HISTORY_YEARS 配置的历史权限；更早已有数据继续从旧库读取');
     if (kind === 'minute' && starts[kind] < yearsAgo(1)) throw new Error('分时起点超过一年，请先确认账号权限后分段处理');
     // 新数据优先，补历史时不会因额度用完而漏掉今天。
-    datesByKind[kind] = datesBetween(starts[kind], end).reverse();
+    datesByKind[kind] = datesBetween(starts[kind], end).filter((d) => !tradingDays || tradingDays.has(d)).reverse();
   }
   // failed：额度/接口异常导致中止；pending、unsupported 只是提示，不算失败
   const result = { mode, daily: 0, minute: 0, requests: 0, estimatedCells: 0, pending: 0, reusedDaily: 0, unsupported, deferred: false, failed: false, errors: [], starts, end };
@@ -132,8 +134,9 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
   const lastMinute = db.prepare('SELECT MAX(ts) AS ts FROM ifind_minute WHERE code=? AND ts>=? AND ts<=?');
   const savedTimes = db.prepare('SELECT ts FROM ifind_minute WHERE code=? AND ts BETWEEN ? AND ?');
   // 日线先补昨收，避免分钟已有数据却不能显示；盘中只获取已结束的分钟。
-  for (const kind of mode === 'intraday' ? ['minute'] : ['daily', 'minute']) {
-    const pool = kind === 'minute' ? symbols.filter(isMinuteIndex) : symbols;
+  const noMinute = noMinuteCodes(db, now);
+  for (const kind of mode === 'intraday' ? ['minute'] : kinds) {
+    const pool = kind === 'minute' ? symbols.filter((s) => isMinuteIndex(s) && !noMinute.has(s.code)) : symbols;
     const batchSize = kind === 'minute' ? 20 : 100;
     let stopped = false;
     for (const day of datesByKind[kind]) {
@@ -141,7 +144,7 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
       const date = dateNumber(day);
       const todo = pool.filter((s) => {
         if (kind === 'daily' && s.type === 'stock' && day < stockStart) return false;
-        if (kind === 'daily' && mode === 'history' && oldDaily.get(s.code, date)) { result.reusedDaily++; return false; }
+        if (kind === 'daily' && mode === 'history' && reuseLegacy && oldDaily.get(s.code, date)) { result.reusedDaily++; return false; }
         const p = progress.get(kind, s.code, date);
         if (kind === 'minute' && mode !== 'intraday' && !p?.complete) {
           const from = Date.parse(`${day}T09:30:00+08:00`), to = Date.parse(`${day}T15:00:00+08:00`);
@@ -220,6 +223,8 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
           if (!grouped.has(s.code)) grouped.set(s.code, new Map());
           grouped.get(s.code).set(normalized.ts, normalized);
         }
+        // 同一请求里有标的返回了数据（说明是交易日），这个标的却整天为空且从没有过分钟：记为没有分钟数据
+        const tradingDay = kind === 'minute' && mode !== 'intraday' && grouped.size > 0;
         tx(db, () => {
           for (const s of batch) {
             const rows = [...(grouped.get(s.code)?.values() ?? [])].sort((a,b) => a.ts-b.ts);
@@ -230,6 +235,8 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
               delLimit.run(date, s.code);
               if (limitUp.has(s.code)) putLimit.run(date, s.code);
             }
+            // 只对指数这样判断：ETF 可能停牌或刚上市
+            if (tradingDay && !rows.length && s.type === 'index' && flagNoMinute(db, s.code, now)) continue;
             mark.run(kind, s.code, date, complete ? 1 : 0, now);
             result[kind] += rows.length;
             if (!complete && mode !== 'intraday') result.pending++;

@@ -32,6 +32,7 @@ import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows, clearRankingCache } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
 import { initSync, startSync, startSchedule, syncInfo, isSyncing, lastSyncAt } from './sync-runner.js';
+import { startBackfillSchedule, backfillInfo } from './backfill-runner.js';
 import {
   AUTH_ENABLED, authenticate, hasRole, originAllowed, verifyToken, loginCookie, authSummary, renderKeyFor,
 } from './auth.js';
@@ -550,7 +551,7 @@ function handleHttp(req, res) {
       const started = startSync('manual');
       return sendJson(res, { ok: started, ...(!started && { error: '同步正在进行中' }), ...syncInfo() });
     }
-    return sendJson(res, syncInfo());
+    return sendJson(res, { ...syncInfo(), backfill: backfillInfo() });
   }
   if (url.pathname === '/api/health') {
     return sendJson(res, { ok: !lastError, state, ...statusMsg() });
@@ -625,3 +626,5 @@ initSync({
   onChange: broadcastStatus,
 });
 startSchedule();
+// 分钟历史夜间补全（IFIND_BACKFILL=1，见 server/backfill-runner.js）
+startBackfillSchedule();

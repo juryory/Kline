@@ -38,6 +38,31 @@ const DATASETS = [
   ['sw1', '申万一级'], ['limit', '涨停'], ['flow', '个股资金流'],
 ];
 
+const wan = (n) => `${(n / 1e4).toLocaleString('zh-CN', { maximumFractionDigits: 0 })} 万`;
+
+/** 分钟历史补全进度（server/backfill-runner.js）：各批完成比例、官方本周用量、预计还要几周 */
+function BackfillNote({ info }) {
+  const s = info.status;
+  // 每周可用于补历史：周一至周四到停止线，周五手动补满，约 1.2 亿
+  const weeks = s ? Math.ceil(s.remainingCells / 1.2e8 * 10) / 10 : null;
+  return (
+    <p className="note">
+      分钟历史补全：{info.enabled ? info.window : '未开启（IFIND_BACKFILL=1）'}
+      {info.running && ` · 补历史中（${fmtHm(info.startedAt)} 开始）`}
+      {!info.running && info.finishedAt && ` · 上一轮 ${fmtTime(info.finishedAt)}${info.exitCode === 0 ? '' : ' 失败'}`}
+      {info.official && ` · 官方本周已用 ${wan(info.official.usage)} / ${wan(info.official.limit)}`}
+      {s && <>
+        <br />{s.start} 起 {s.days} 个交易日：
+        {s.batches.map((b) => `${b.label} ${b.pending ? '未开始' : `${b.total ? Math.floor(b.done / b.total * 100) : 100}%（${b.codes} 个）`}`).join(' · ')}
+        {s.remainingCells > 0 ? `；剩余约 ${wan(s.remainingCells)} 数据量，约 ${weeks} 周` : '；已全部补完'}
+        {s.noMinute > 0 && `；${s.noMinute} 个指数没有分钟数据，已跳过`}
+      </>}
+      {s?.paused && <><br /><span className="param-error">已暂停：{s.paused.reason}。确认后运行 npm run sync:ifind -- --backfill --resume</span></>}
+      {info.last && <><br />{info.last}</>}
+    </p>
+  );
+}
+
 /**
  * 数据同步记录（只读）：服务端按 SYNC_WINDOW / SYNC_EVERY 定时从 tushare 同步，这里看每次同步后各数据的最新日期，
  * 「新」= 本次同步新到的数据。用来观察同花顺概念等板块数据每天几点发布
@@ -73,6 +98,7 @@ function SyncSection() {
         其中补历史 {info.quota.historyUsed.toLocaleString()}；保留额度 {info.quota.reserve.toLocaleString()}。
         不包含其他终端用量，以官方账户为准。盘中实时数据按需拉取：只请求正在查看的标的和排行，不看的不更新。
       </p>}
+      {info?.backfill && <BackfillNote info={info.backfill} />}
       {info?.latest && <p className="note">
         iFinD 已保存日期：{datasets.map(([key,label]) => `${label} ${fmtMd(info.latest[key])}${
           info.coverage?.[key] ? `（${info.coverage[key][0]}/${info.coverage[key][1]}）` : ''}`).join(' · ')}。

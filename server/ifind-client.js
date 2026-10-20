@@ -86,6 +86,21 @@ export function createIfindClient({ fetchImpl = fetch, refreshToken = process.en
       const result = await post(daily ? 'cmd_history_quotation' : 'high_frequency', { access_token: token }, body);
       return { rows: parseIfind(result), cells: result.dataVol == null || result.dataVol === '' ? NaN : Number(result.dataVol) };
     },
+    /** 多天 1 分钟线（补历史用）：startday、endday 为 'YYYY-MM-DD'，含两端 */
+    async minuteRange(codes, startday, endday) {
+      const result = await post('high_frequency', { access_token: await ensureToken() }, { codes: codes.join(','),
+        indicators: FIELDS, starttime: `${startday} 09:30:00`, endtime: `${endday} 15:00:00`,
+        functionpara: { Interval: '1', CPS: 'no', Fill: 'Original', Timeformat: 'BeiJingTime' } });
+      return { rows: parseIfind(result), cells: result.dataVol == null || result.dataVol === '' ? NaN : Number(result.dataVol) };
+    },
+    /** 官方统计的本周行情用量 { usage, limit }（含其他终端），不消耗额度 */
+    async dataVolume() {
+      const result = await post('get_data_volume', { access_token: await ensureToken() }, {});
+      const stat = result.tables?.QuotesDataStat;
+      const usage = Number(stat?.usage), limit = Number(stat?.limit);
+      if (!Number.isFinite(usage) || !Number.isFinite(limit)) throw new Error('iFinD 用量接口返回格式异常');
+      return { usage, limit };
+    },
     /** 经济数据库：返回 { series: { 指标ID: [{ time, value }] }, cells }；EDB 额度与行情额度分开计 */
     async edb(ids, startdate, enddate) {
       const result = await post('edb_service', { access_token: await ensureToken() },

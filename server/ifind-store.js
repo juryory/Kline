@@ -36,6 +36,14 @@ export function initIfind(db) {
       week TEXT, lane TEXT, kind TEXT, cells INTEGER NOT NULL,
       PRIMARY KEY(week,lane,kind)
     ) WITHOUT ROWID;
+    -- 没有分钟数据的指数（如 700xxx 行业）：补历史和盘后同步都跳过，checked_at 起 30 天后再试一次
+    CREATE TABLE IF NOT EXISTS ifind_no_minute (
+      code TEXT PRIMARY KEY, checked_at INTEGER NOT NULL
+    ) WITHOUT ROWID;
+    -- 补历史核对不一致的分钟日（分钟收盘 / 成交额汇总 对不上日线）
+    CREATE TABLE IF NOT EXISTS ifind_backfill_issues (
+      code TEXT, date INTEGER, detail TEXT, at INTEGER, PRIMARY KEY(code,date)
+    ) WITHOUT ROWID;
     CREATE TEMP VIEW IF NOT EXISTS merged_daily AS
       SELECT * FROM ifind_daily UNION ALL
       SELECT d.* FROM daily d WHERE NOT EXISTS
@@ -53,6 +61,17 @@ export function mergedMinutes(db, code, from = 0, to = Number.MAX_SAFE_INTEGER) 
     SELECT code,ts,open,high,low,close,vol,amount,'tushare' AS source FROM minute m
     WHERE code=? AND freq=1 AND ts BETWEEN ? AND ? AND NOT EXISTS
       (SELECT 1 FROM ifind_minute i WHERE i.code=m.code AND i.ts=m.ts) ORDER BY ts`).all(code, from, to, code, from, to);
+}
+const NO_MINUTE_RECHECK = 30 * 86400_000;
+/** 当前标记为没有分钟数据的代码 */
+export function noMinuteCodes(db, now = Date.now()) {
+  return new Set(db.prepare('SELECT code FROM ifind_no_minute WHERE checked_at > ?').all(now - NO_MINUTE_RECHECK).map((r) => r.code));
+}
+/** 交易日整段返回空、且库里从来没有这个代码的分钟时，记为没有分钟数据 */
+export function flagNoMinute(db, code, now = Date.now()) {
+  if (db.prepare('SELECT 1 FROM ifind_minute WHERE code=? LIMIT 1').get(code)) return false;
+  db.prepare('INSERT OR REPLACE INTO ifind_no_minute VALUES (?,?)').run(code, now);
+  return true;
 }
 export function writeIfind(db, kind, code, rows) {
   const sql = kind === 'daily'

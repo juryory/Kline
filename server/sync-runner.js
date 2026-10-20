@@ -93,7 +93,7 @@ function dataCoverage() {
       const counts = db.prepare(`SELECT COUNT(*) AS total, SUM(EXISTS(SELECT 1 FROM ifind_progress p
         WHERE p.code=s.code AND p.kind='minute' AND p.date=? AND p.complete=1)) AS complete
         FROM (SELECT code,type,category FROM ifind_symbols UNION SELECT code,type,category FROM symbols) s
-        WHERE s.type IN ('index','etf')`).get(latest.indexMinute ?? 0);
+        WHERE s.type IN ('index','etf') AND s.code NOT IN (SELECT code FROM ifind_no_minute)`).get(latest.indexMinute ?? 0);
       out.indexMinute = [counts.complete ?? 0, counts.total];
       return out;
     }

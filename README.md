@@ -282,8 +282,10 @@ npm run sync
 npm run sync:ifind
 npm run sync:tushare
 # 单独补历史；不会改变默认日常模式
+# 分钟历史补全：看进度（不耗额度）/ 跑一轮 / 补满到官方停止线（可 Ctrl+C）
 npm run sync:ifind -- --backfill --dry-run
 npm run sync:ifind -- --backfill
+npm run sync:ifind -- --backfill --drain
 # 当天已结束分钟的增量（不开启定时也可手动使用）
 npm run sync:ifind -- --intraday
 # Docker 示例
@@ -293,8 +295,9 @@ npm run sync:ifind -- --intraday
 
 自动盘后任务为北京时间周一至周五 **15:30—21:00，每 15 分钟一次**（Docker 已设置 `TZ=Asia/Shanghai`）。
 日常模式只同步已收盘日期，`IFIND_CLOSE_CUTOFF`（默认 15:30）前截止前一日；宏观数据每天只拉一次。默认滚动最近 7 个自然日，跳过已经完成的标的/日期。
-`--backfill` 默认补近半年分时；个股日线最多近三年，其余日线从 `IFIND_HISTORY_YEARS` 年前开始（默认 5）。
-补历史时，已有 Tushare 日线按标的/日期直接复用，不重新向 iFinD 下载；新日期由日常同步写入 iFinD。
+`--backfill` 补最近 `IFIND_BACKFILL_MONTHS`（默认 6）个月的分钟线和同期 iFinD 日线，按批次：核心指数 → 同花顺概念 →
+同花顺行业 / 申万一级 → 成交额前 300 的 ETF；额度、定时和核对规则见 `docs/ifind-rollout.md` 第 4 节。
+没有分钟数据的指数（700xxx、884xxx 三级行业等）自动记下，补历史和盘后同步都跳过。申万一级按 `801xxx.SL` 请求。
 **1.5 亿额度不等于拥有全部历史年限。** 更早的旧库行情仍能读取；旧库也没有的部分，需先确认账号历史权限再提高 `IFIND_HISTORY_YEARS`。
 各类型优先处理最近日期；日线先同步供昨收使用，然后处理分钟。任务每轮默认最多 2000 次请求或 600 秒，
 先到上限后输出 `deferred=true`，保留断点供下次继续；`--dry-run` 的 `estimatedCells` 只计算本轮计划，并非整个半年总额。

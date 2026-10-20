@@ -76,16 +76,53 @@ docker compose exec kline npm run sync:ifind
 - 每个被查看的标的一天约 5000 数据量，记入本地周额度账本（kind = live_minute / realtime）。
 - 个股分钟 K（5/15/30/60 分）需要历史分钟，暂不提供。
 
-历史补齐在收盘窗口外手动运行：
+### 分钟历史补全
+
+最近 `IFIND_BACKFILL_MONTHS`（默认 6）个月的 1 分钟线，按批次补，一批补完再开始下一批：
+
+| 批次 | 内容 | 6 个月约用 |
+|---|---|---|
+| 核心指数 | 内置指数、微盘股等无分类指数（12 个） | 210 万 |
+| 同花顺概念 | 常规概念（约 386 个） | 6700 万 |
+| 同花顺行业 / 申万一级 | 有分钟数据的行业（约 320 个）+ 申万一级 31 个 | 6100 万 |
+| 活跃 ETF | 开始补这一批时，按前 20 个交易日平均成交额选前 `IFIND_BACKFILL_ETF_TOP`（300）只，选定后固定 | 5200 万 |
+
+- 批内从最近的交易日往前，每次请求 5 个标的 × 至多 10 个交易日（交易日历取自 `get_trade_dates`，不耗额度）。
+  已有记录（盘后同步写过的、停牌 / 未上市返回空的）不再请求。中断、重启都从断点继续。
+- 同时补同期 iFinD 日线（不复用 Tushare，约 7 数据量 / 标的日，全部不到 100 万）：Tushare 深证成指、创业板指的成交额只算成分股，
+  和 iFinD 口径不同，核对要用同一来源。
+- 核对：每个写入的完整交易日，15:00 收盘价、成交额、成交量汇总都和 iFinD 日线比（没有 iFinD 日线时只比收盘）。
+  不一致记入 `ifind_backfill_issues`；同一批不一致 ≥5 天且超过 2% 时暂停，设置页显示原因。
+  查明后运行 `npm run sync:ifind -- --backfill --resume` 清掉暂停和记录继续。
+- 没有分钟数据的指数（约 457 个 700xxx / 884xxx 三级行业）：盘后同步试过 3 天以上都没有分钟的、或补历史整段为空的，记入 `ifind_no_minute`，
+  补历史和盘后同步都跳过，30 天后再试一次。
+- 申万一级：Tushare `801xxx.SI` 对应 iFinD `801xxx.SL`（收盘、成交量、成交额已核对一致），内置映射，不用配置文件。
+
+**额度**：每周 1.5 亿，周一北京时间零点重置。补历史每次请求前同时检查两道闸：
+
+| | 本机补历史周上限 | 官方本周用量停止线（含其他终端） |
+|---|---|---|
+| 定时（工作日夜间、周末） | `IFIND_BACKFILL_WEEKLY` 5000 万 | `IFIND_BACKFILL_STOP` 1 亿 |
+| `--drain` 补满（周五晚手动） | 不限 | `IFIND_BACKFILL_DRAIN_STOP` 1.45 亿 |
+
+官方用量来自 `get_data_volume`（不耗额度），每轮开始查一次、之后每 5 分钟校正，中间按返回的 dataVol 累加。
+日常同步 + 盘中实时一周约 2200 万，定时补历史停在 1 亿时还剩 5000 万，周五补满后也留 500 万。
+
+**定时**：`.env.docker` 设 `IFIND_BACKFILL=1` 后，服务进程在工作日 21:30—次日 08:30（`IFIND_BACKFILL_WINDOW`）、
+周六日全天，每 20 分钟（`IFIND_BACKFILL_EVERY`）跑一轮，每轮最多 `IFIND_MAX_SECONDS`（600 秒）。
+和盘后同步共用 `ifind-sync.lock`：盘后同步或手动补满在跑时这一轮跳过。日志在 `sync-logs/*-backfill.log`。
+暂停：改回 `IFIND_BACKFILL=0` 后 `docker compose up -d`，已补的数据保留。进度看「设置 → 数据同步」。
 
 ```bash
+# 各批进度、剩余数据量、官方本周用量（不耗额度）
 docker compose exec kline npm run sync:ifind -- --backfill --dry-run
-docker compose exec kline npm run sync:ifind -- --backfill
+# 小样本试跑（只补指定代码）
+docker compose exec -e IFIND_SYMBOLS=000300.SH kline npm run sync:ifind -- --backfill
+# 周五晚上补满：跑到官方用量 1.45 亿或全部补完；Ctrl+C 等当前请求写完再停，再按一次立即退出
+docker compose exec kline npm run sync:ifind -- --backfill --drain
 ```
 
-每轮受请求数、运行时间和周预算限制，`deferred=true` 表示暂停在断点，下轮同命令继续。
-已完成日期不再请求；已有 Tushare 日线直接复用。当前不自动调度长期历史任务，可在服务器另行安排窗口。
-缺失节假日/停牌数据不算完成，日志可能报告待补；不能把所有 pending 都理解为接口故障。
+补满会占用 iFinD 同步锁，**不要在 15:30—21:00 跑**（盘后同步会因为拿不到锁而失败），21:00 以后再开始。
 
 ## 5. 宏观数据
 
