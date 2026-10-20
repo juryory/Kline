@@ -1,8 +1,11 @@
 import { openIfindDb } from '../ifind-db.js';
 import { mergedDaily, mergedMinutes } from '../ifind-store.js';
-import { chinaDate, dateNumber } from '../ifind-client.js';
-import { isMinuteIndex } from '../ifind-sync.js';
-import { computeRanking } from '../rank.js';
+import { chinaDate, dateNumber, createIfindClient } from '../ifind-client.js';
+import { liveQuotes, refreshMinutes, liveDailyBar } from '../ifind-live.js';
+import { ifindConfigured } from '../source-config.js';
+import { isMinuteIndex, loadMappings, remoteSymbol } from '../ifind-sync.js';
+import { isIfindDomestic } from '../../shared/periods.js';
+import { computeRanking, computeIfindRanking } from '../rank.js';
 import { attachBreadth } from '../breadth.js';
 
 // 保留接口价格精度，ETF 的三位小数不能按股票两位小数舍入。
@@ -26,22 +29,48 @@ export function dailyBars(db, symbol) {
     ...(r.amount != null && { turnover: r.amount * 1000 }), dataSource: r.source,
   }));
 }
+// 盘中按需实时：只有被访问的标的才请求 iFinD（见 server/ifind-live.js）
+let client, mappings;
+const getClient = () => client ??= createIfindClient();
+const canLive = (symbol) => ifindConfigured() && isIfindDomestic(symbol);
+const live = (symbol) => ({ db: getDb(), client: getClient(), symbol, remote: remoteSymbol(symbol, mappings ??= loadMappings()) });
+
+/** 库里的日线后面接上今天的实时日K（盘后同步写入当天日线之前） */
+export function withLiveBar(bars, bar) {
+  if (!bar || bars.at(-1)?.timestamp >= bar.timestamp) return bars;
+  const { date, ...rest } = bar;
+  return [...bars, { ...rest, dataSource: 'ifind-live' }];
+}
 export async function getDaily(symbol) {
-  const bars = dailyBars(getDb(), symbol);
+  let bars = dailyBars(getDb(), symbol);
+  if (canLive(symbol)) bars = withLiveBar(bars, await liveDailyBar(live(symbol)));
   if (!bars.length) throw new Error(`${symbol.code} 尚无 iFinD 或 Tushare 本地日线，请在服务器运行同步`);
   return bars;
 }
+/** 分时 Bar；个股带均价线 avg（累计成交额 / 累计成交量，库里分钟成交量单位是股） */
+export function intradayBars(rows, symbol) {
+  let amount = 0, vol = 0;
+  return rows.map((r) => {
+    const bar = { ...toBar(r), dataSource: r.source };
+    if (symbol.type === 'stock' && r.amount != null) {
+      amount += r.amount; vol += r.vol;
+      if (vol > 0) bar.avg = Math.round((amount / vol) * 1000) / 1000;
+    }
+    return bar;
+  });
+}
 export async function getIntraday(symbol) {
-  if (!isMinuteIndex(symbol)) throw new Error('iFinD 模式为境内指数、板块和 ETF 开放分时，个股仅日线');
+  if (!isIfindDomestic(symbol)) throw new Error('iFinD 模式暂只开放境内标的的分时');
   const d = getDb();
+  if (canLive(symbol)) await refreshMinutes(live(symbol));
   const last = d.prepare(`SELECT MAX(ts) AS ts FROM
     (SELECT MAX(ts) AS ts FROM ifind_minute WHERE code=? UNION ALL SELECT MAX(ts) FROM minute WHERE code=? AND freq=1)`)
     .get(symbol.code, symbol.code)?.ts;
-  if (!last) throw new Error(`${symbol.code} 尚无本地分时，请在服务器运行 iFinD 同步`);
+  if (!last) throw new Error(`${symbol.code} 暂无分时数据（盘中打开时按需拉取）`);
   const day = chinaDate(last);
   const start = Date.parse(`${day}T00:00:00+08:00`);
   const selected = mergedMinutes(d, symbol.code, start, start+86400_000-1);
-  const bars = selected.map((r) => ({ ...toBar(r), dataSource: r.source }));
+  const bars = intradayBars(selected, symbol);
   const prev = d.prepare('SELECT close FROM merged_daily WHERE code=? AND date<? ORDER BY date DESC LIMIT 1')
     .get(symbol.code, dateNumber(day));
   // 缺昨收时明确失败，不能用开盘价冒充昨收导致涨跌幅错误。
@@ -70,16 +99,33 @@ export function aggregateMinutes(rows, freq) {
   return out;
 }
 export async function getMinutes(symbol, freq) {
-  if (!isMinuteIndex(symbol)) throw new Error('个股仅同步日线');
+  if (!isMinuteIndex(symbol)) throw new Error('iFinD 模式个股暂不提供分钟 K');
+  if (canLive(symbol)) await refreshMinutes(live(symbol));
   const from = new Date(); from.setUTCMonth(from.getUTCMonth()-6);
   return aggregateMinutes(mergedMinutes(getDb(), symbol.code, from.getTime()), freq);
 }
-// 板块排行 / 宏观始终读主库（tushare 同步数据）：iFinD 库只存行情，板块历史与宏观由主库提供
+// 同花顺概念排行用 iFinD 的板块列表 / 成分股 / 涨停；申万一级仍读主库（tushare 同步数据）
 import { openDb } from '../db.js';
 let mainDb;
 const getMainDb = () => mainDb ??= openDb();
-export async function getRanking(list) { return computeRanking(getMainDb(), list); }
+export async function getRanking(list) {
+  if (list !== 'THN') return computeRanking(getMainDb(), list);
+  const d = getDb();
+  // 盘中用实时行情（见 server/ifind-live.js），拿不到时用盘后数据
+  let live = null;
+  if (ifindConfigured()) {
+    const codes = d.prepare("SELECT code FROM ifind_boards WHERE list = 'THN' AND code IS NOT NULL").all().map((r) => r.code);
+    if (codes.length) live = await liveQuotes({ db: d, client: getClient(), codes });
+  }
+  return computeIfindRanking(d, live);
+}
+/** 宏观：按期合并，同一期 iFinD 的字段覆盖 tushare；iFinD 没有的期数和字段（更早历史、未映射指标）用 tushare 补 */
+export function mergeMacro(tushareRows, ifindRows) {
+  const byPeriod = new Map(tushareRows.map((r) => [r.period, { ...JSON.parse(r.data), period: r.period }]));
+  for (const r of ifindRows) byPeriod.set(r.period, { ...byPeriod.get(r.period), ...JSON.parse(r.data), period: r.period });
+  return [...byPeriod.values()].sort((a, b) => (a.period < b.period ? -1 : a.period > b.period ? 1 : 0));
+}
 export async function getMacro(dataset) {
-  return getMainDb().prepare('SELECT period, data FROM macro WHERE dataset = ? ORDER BY period').all(dataset)
-    .map((r) => ({ ...JSON.parse(r.data), period: r.period }));
+  return mergeMacro(getMainDb().prepare('SELECT period, data FROM macro WHERE dataset = ?').all(dataset),
+    getDb().prepare('SELECT period, data FROM ifind_macro WHERE dataset = ?').all(dataset));
 }

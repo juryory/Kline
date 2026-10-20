@@ -6,7 +6,7 @@ import SymbolSearch from './SymbolSearch.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
 import RankBrowser from './RankBrowser.jsx';
 import MacroPage from './MacroPage.jsx';
-import { endIndexOf, minBarsFor, moveView, periodsFor, quoteOf, stepPeriod, PRIMARY_PERIODS } from './view.js';
+import { endIndexOf, keyPeriods, minBarsFor, moveView, periodsFor, quoteOf, stepPeriod, PRIMARY_PERIODS } from './view.js';
 import { MAIN, SUB } from './indicators.js';
 import { DRAW_TOOLS, dragDrawable } from './drawTools.js';
 import { contentSize, isSymbolMasked, maskName } from '../../shared/settings.js';
@@ -59,7 +59,7 @@ const VIEW_KEYS = {
   Home: () => ({ toEarliest: true }),
   End: () => ({ toLatest: true }),
 };
-// 周期切换：回车 → 更细（月→周→日→分时），Backspace → 更粗
+// 周期切换：回车 → 更细（月→周→日→分时），Backspace → 更粗；分钟 K 不在键盘顺序里，只能点按钮进入
 const PERIOD_KEYS = { Enter: -1, Backspace: 1 };
 // 自选切换：当前标的在自选里时，PageUp 上一个、PageDown 下一个（首尾循环）
 const WATCH_KEYS = { PageUp: -1, PageDown: 1 };
@@ -575,8 +575,8 @@ export default function ControlPage() {
             <dt>↑ / ↓</dt><dd>放大 / 缩小（也可用滚轮）</dd>
             <dt>← / →</dt><dd>左右移动 1 根，Shift 加速 10 根（也可拖拽）</dd>
             <dt>Home / End</dt><dd>最早 / 回到最新</dd>
-            <dt>Enter</dt><dd>更小周期：{[...periods].reverse().map((p) => p.label).join(' → ')}</dd>
-            <dt>Backspace</dt><dd>更大周期：{periods.map((p) => p.label).join(' → ')}</dd>
+            <dt>Enter</dt><dd>更小周期：{[...keyPeriods(periods)].reverse().map((p) => p.label).join(' → ')}</dd>
+            <dt>Backspace</dt><dd>更大周期：{keyPeriods(periods).map((p) => p.label).join(' → ')}（分钟 K 点周期按钮进入）</dd>
             <dt>PgUp / PgDn</dt><dd>自选里的上一个 / 下一个（当前标的需在自选里）</dd>
             <dt>Insert / Delete</dt><dd>加入 / 移出自选（选中画线时 Delete 删除画线）</dd>
             <dt>画线</dt><dd>左侧工具栏选工具，在图上点击端点；拖动端点修改；Esc 取消</dd>

@@ -2,8 +2,8 @@
  * 盘后同步：子进程跑 scripts/sync.js（tushare → 本地库），定时触发 + 每次运行留记录
  *
  * 定时（按容器时区 TZ 计时，只在 SYNC_DAYS 指定的星期执行）
- *   SYNC_WINDOW=18:15-21:00  时间窗口（包含 21:00）
- *   SYNC_EVERY=15            窗口内每隔多少分钟同步一次（从窗口开始算：18:15、18:30、18:45 …）；0 = 关闭
+ *   SYNC_WINDOW=15:30-21:00  时间窗口（包含 21:00）；iFinD 15:30 后才同步当天（IFIND_CLOSE_CUTOFF）
+ *   SYNC_EVERY=15            窗口内每隔多少分钟同步一次（从窗口开始算：15:30、15:45、16:00 …）；0 = 关闭
  *   SYNC_AT=09:00            另外再加的固定时刻（可多个，逗号分隔），可选
  *   SYNC_DAYS=1-5            周一到周五（0/7 = 周日；也可写 1,3,5）
  *   没有配置 TUSHARE_TOKEN 时不启用定时同步。
@@ -170,7 +170,7 @@ export function syncInfo() {
   const { running, ...info } = sync;
   return { running: !!running, ...info, source: adapterName, schedule: scheduleSummary(),
     ...(adapterName === 'ifind' && { quota: quotaStatus(ifindDb ??= openIfindDb()),
-      latest: dataDates(), coverage: dataCoverage(), intraday: process.env.IFIND_INTRADAY_ENABLED === '1' }),
+      latest: dataDates(), coverage: dataCoverage(), intraday: true }),
     history: readHistory(60).filter((r) => (r.source || 'local') === adapterName), arrivals: todayArrivals(),
     datasets: sourceDatasets().map(({key,label}) => ({key,label})) };
 }
@@ -266,7 +266,7 @@ function parseDays(spec) {
 function scheduleTimes() {
   const times = new Set();
   const every = +(process.env.SYNC_EVERY ?? 15);
-  const window = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec((process.env.SYNC_WINDOW || '18:15-21:00').trim());
+  const window = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec((process.env.SYNC_WINDOW || '15:30-21:00').trim());
   if (every > 0 && window) {
     const [from, to] = [toMinutes(window[1]), toMinutes(window[2])];
     for (let t = from; t <= to; t += every) times.add(t);
@@ -285,7 +285,7 @@ function scheduleSummary() {
   if (!scheduleEnabled()) return `未开启（没有配置 ${adapterName === 'ifind' ? 'IFIND_REFRESH_TOKEN / IFIND_ACCESS_TOKEN' : 'TUSHARE_TOKEN'}）`;
   if (!TIMES.length) return '未开启（SYNC_EVERY=0 且没有 SYNC_AT）';
   const every = +(process.env.SYNC_EVERY ?? 15);
-  const window = (process.env.SYNC_WINDOW || '18:15-21:00').trim();
+  const window = (process.env.SYNC_WINDOW || '15:30-21:00').trim();
   const extra = (process.env.SYNC_AT || '').trim();
   const dayText = [...DAYS].sort().map((d) => '日一二三四五六'[d]).join('');
   return `${every > 0 ? `${window} 每 ${every} 分钟` : ''}${extra ? `${every > 0 ? '，另加 ' : ''}${extra}` : ''}（周${dayText}）`;
@@ -293,7 +293,7 @@ function scheduleSummary() {
 
 /** 启动定时器（index.js 调用一次） */
 export function startSchedule() {
-  if (!TIMES.length && process.env.IFIND_INTRADAY_ENABLED !== '1') {
+  if (!TIMES.length) {
     console.log(`[sync] 定时同步：${scheduleSummary()}`);
     return;
   }
@@ -301,15 +301,8 @@ export function startSchedule() {
   const done = new Set(); // 已触发过的「日期 时刻」
   setInterval(() => {
     if (!scheduleEnabled()) return;
+    // 盘中实时数据不走定时同步：服务进程按需拉当前访问的标的（见 server/ifind-live.js）
     const now = new Date();
-    // 盘中一分钟增量，使用北京时间，午休/周末不轮询；无交易日历时节假日可能返回空数据。
-    if (adapterName === 'ifind' && process.env.IFIND_INTRADAY_ENABLED === '1' && isChinaMinuteWindow(now.getTime())) {
-      const minuteKey = `intraday-${Math.floor(now.getTime()/60_000)}`;
-      if (!done.has(minuteKey) && !isSyncing()) {
-        done.add(minuteKey);
-        startSync('intraday');
-      }
-    }
     const minute = now.getHours() * 60 + now.getMinutes();
     const key = `${now.toDateString()} ${minute}`;
     if (!TIMES.includes(minute) || !DAYS.has(now.getDay()) || done.has(key)) return;
@@ -319,8 +312,3 @@ export function startSchedule() {
   }, 20_000);
 }
 
-export function isChinaMinuteWindow(time) {
-  const d = new Date(time+8*3600_000), m = d.getUTCHours()*60+d.getUTCMinutes();
-  return d.getUTCDay() >= 1 && d.getUTCDay() <= 5
-    && (m >= 572 && m <= 692 || m >= 782 && m <= 902);
-}

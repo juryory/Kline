@@ -19,6 +19,19 @@ export function initIfind(db) {
     CREATE TABLE IF NOT EXISTS ifind_usage (
       month TEXT, kind TEXT, cells INTEGER NOT NULL, PRIMARY KEY(month,kind)
     ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS ifind_limit_up (
+      date INTEGER, code TEXT, PRIMARY KEY(date,code)
+    ) WITHOUT ROWID;
+    -- 概念板块：iFinD 板块树节点（block_id）→ 指数代码（code，查不到时为 NULL）
+    CREATE TABLE IF NOT EXISTS ifind_boards (
+      list TEXT, block_id TEXT, name TEXT, code TEXT, PRIMARY KEY(list,block_id)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS ifind_members (
+      board TEXT, stock TEXT, PRIMARY KEY(board,stock)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS ifind_macro (
+      dataset TEXT, period TEXT, data TEXT, PRIMARY KEY(dataset,period)
+    ) WITHOUT ROWID;
     CREATE TABLE IF NOT EXISTS ifind_weekly_usage (
       week TEXT, lane TEXT, kind TEXT, cells INTEGER NOT NULL,
       PRIMARY KEY(week,lane,kind)

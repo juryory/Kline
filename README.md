@@ -40,8 +40,8 @@ npm start                 # http://<直播机内网IP>:8787
 | ↑ / ↓（或滚轮） | 放大 / 缩小时间范围（40–1000 根） |
 | ← / →（或拖拽） | 左右移动 1 根，按住 Shift 每次 10 根 |
 | Home / End | 跳到最早 / 回到最新（跟随最新时会自动接上新 K 线） |
-| Enter | 更小周期：年K → 月K → 周K → 日K → 60分 → 30分 → 15分 → 5分 → 分时 |
-| Backspace | 更大周期：分时 → 5分 → 15分 → 30分 → 60分 → 日K → 周K → 月K → 年K |
+| Enter | 更小周期：年K → 月K → 周K → 日K → 分时（在分钟 K 上时直接进分时） |
+| Backspace | 更大周期：分时 → 日K → 周K → 月K → 年K（在分钟 K 上时直接回日K）；5 / 15 / 30 / 60 分钟 K 点周期按钮进入 |
 | PageUp / PageDown | 自选里的上一个 / 下一个（当前标的需在自选里，首尾循环） |
 | Insert / Delete | 当前标的加入 / 移出自选 |
 | 直接敲字母 / 数字 | 检索标的，如 `000001`、`SZZS`、`shangzheng`；中文名需先点检索框再输入 |
@@ -151,7 +151,7 @@ docker compose exec kline npm run sync              # 首次建库（约半小�
 - **数据卷** `kline-data:/data`：`market.db`（行情库，含 `-wal` / `-shm`）和 `runtime/state.json`（导播状态：设置、自选、画线）。重建容器不丢。
   - 已有本地库可以直接拷进去，省掉首次同步：先停服务 `docker compose stop`，再 `docker compose cp data/market.db kline:/data/market.db`，然后 `docker compose start`。
   - 改用宿主机目录（如 `./kline-data:/data`）时，容器以 `node` 用户（uid 1000）运行，需要先 `chown -R 1000:1000 ./kline-data`。
-- **定时同步**：`.env.docker` 里 `SYNC_WINDOW=18:15-21:00`、`SYNC_EVERY=15`、`SYNC_DAYS=1-5`，北京时间周一至周五 18:15 开始，每 15 分钟后台同步一次，包含 21:00，共 12 个触发时刻；上一轮未结束时跳过，不并发执行。不需要宿主机计划任务。升级已有部署时也要更新 `.env.docker` 的这两项，并运行 `docker compose up -d --build` 重新创建容器。同步记录在导播台「设置 → 数据同步」，完整日志在数据卷的 `sync-logs/`。也可以手动 `docker compose exec kline npm run sync`。
+- **定时同步**：`.env.docker` 里 `SYNC_WINDOW=15:30-21:00`、`SYNC_EVERY=15`、`SYNC_DAYS=1-5`，北京时间周一至周五 15:30 开始，每 15 分钟后台同步一次，包含 21:00，共 23 个触发时刻；上一轮未结束时跳过，不并发执行。不需要宿主机计划任务。升级已有部署时也要更新 `.env.docker` 的这两项，并运行 `docker compose up -d --build` 重新创建容器。同步记录在导播台「设置 → 数据同步」，完整日志在数据卷的 `sync-logs/`。也可以手动 `docker compose exec kline npm run sync`。
 - **健康检查**：`GET /healthz`（不需要登录），镜像已配 `HEALTHCHECK`。
 - **只能跑一个实例**：导播状态和行情缓存在进程内存里，不要开多个副本。
 - **端口**只绑定 `127.0.0.1:8787`，由宝塔 Nginx 反向代理对外。宝塔给 `kline.example.com` 开 HTTPS，反向代理到 `http://127.0.0.1:8787`，配置里要有 WebSocket 和转发头：
@@ -210,8 +210,8 @@ npm start
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `SYNC_WINDOW` | `18:15-21:00` | 时间窗口，包含结束时刻 |
-| `SYNC_EVERY` | `15` | 窗口内每隔多少分钟同步一次（18:15、18:30 … 21:00）；`0` = 关闭 |
+| `SYNC_WINDOW` | `15:30-21:00` | 时间窗口，包含结束时刻 |
+| `SYNC_EVERY` | `15` | 窗口内每隔多少分钟同步一次（15:30、15:45 … 21:00）；`0` = 关闭 |
 | `SYNC_AT` | 空 | 另外再加的固定时刻，可多个，逗号分隔（如 `08:30`） |
 | `SYNC_DAYS` | `1-5` | 星期，`0`/`7` = 周日，也可写 `1,3,5` |
 | `SYNC_LOG_KEEP` | `500` | 保留最近多少份同步日志 |
@@ -291,8 +291,8 @@ npm run sync:ifind -- --intraday
 # docker compose exec kline npm run sync:ifind
 ```
 
-自动盘后任务沿用北京时间周一至周五 **18:15—21:00，每 15 分钟一次**（Docker 已设置 `TZ=Asia/Shanghai`）。
-日常模式只同步已收盘日期，18 点前截止前一日。默认滚动最近 7 个自然日，跳过已经完成的标的/日期。
+自动盘后任务为北京时间周一至周五 **15:30—21:00，每 15 分钟一次**（Docker 已设置 `TZ=Asia/Shanghai`）。
+日常模式只同步已收盘日期，`IFIND_CLOSE_CUTOFF`（默认 15:30）前截止前一日；宏观数据每天只拉一次。默认滚动最近 7 个自然日，跳过已经完成的标的/日期。
 `--backfill` 默认补近半年分时；个股日线最多近三年，其余日线从 `IFIND_HISTORY_YEARS` 年前开始（默认 5）。
 补历史时，已有 Tushare 日线按标的/日期直接复用，不重新向 iFinD 下载；新日期由日常同步写入 iFinD。
 **1.5 亿额度不等于拥有全部历史年限。** 更早的旧库行情仍能读取；旧库也没有的部分，需先确认账号历史权限再提高 `IFIND_HISTORY_YEARS`。
@@ -320,12 +320,9 @@ npm run sync:ifind -- --intraday
 旧免费账号可显式使用 `IFIND_QUOTA_PROFILE=free`，恢复日线 `IFIND_DAILY_BUDGET=900000`、
 分钟 `IFIND_MINUTE_BUDGET=1400000` 的独立月预算。
 
-盘中增量默认关闭。样本通过后，在服务器设 `IFIND_INTRADAY_ENABLED=1` 并重建容器：
-北京时间周一至周五 09:32—11:32、13:02—15:02 尝试每分钟同步一次，运行中不重叠，忙时顺延。
-只请求上一根之后已经结束的分钟，盘中不把整天标记完成；盘后检查完整覆盖，缺根才重新补当天。
-这属于分钟级 HTTP 轮询，**不是逐笔实时推送**；实际延迟取决于接口发布时间和批量请求耗时。
-初期可用 `IFIND_INTRADAY_SYMBOLS` 仅更新重点指数，其他标的仍盘后更新。
-日常、盘中和手动历史补齐共用锁文件，建议历史任务在收盘同步窗口外运行。
+盘中实时数据按需拉取，无需开关：只有正在查看的标的（分时、日K、分钟 K）和排行才请求 iFinD，不看的不更新，
+详见 `docs/ifind-rollout.md` 第 4 节。拉到的分钟线写进库里，盘后同步看到完整的一天直接跳过，不重复消耗。
+这属于分钟级 HTTP 请求，**不是逐笔实时推送**。日常同步和手动历史补齐共用锁文件，建议历史任务在收盘同步窗口外运行。
 
 ### 代码与单位核对
 

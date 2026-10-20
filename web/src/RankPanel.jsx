@@ -8,6 +8,7 @@ import './panel.css';
  */
 export default function RankPanel({ rank, state }) {
   const scale = renderScale(contentSize(state.settings)); // 两侧安全区外不放内容
+  const columns = RANK_COLUMNS.filter((c) => !rank.hidden?.includes(c.key));
   const title = `${rank.listName} · ${columnLabel(rank.sort)}${rank.desc ? '榜' : '（升序）'}`;
 
   return (
@@ -15,17 +16,17 @@ export default function RankPanel({ rank, state }) {
       <div className="head">
         <div className="title">
           <span className="name">{title}</span>
-          <span className="code">{fmtDate(rank.date)}</span>
+          <span className="code">{fmtDate(rank.date)}{rank.liveAt ? ` ${rank.liveAt.slice(0, 5)}` : ''}</span>
         </div>
         <span className="code">前 {rank.rows.length} 名</span>
       </div>
 
       {/* 行高按「前 N 名」固定分配，板块数不足 N 时下方留空，不把行拉高 */}
-      <div className="rank-table" style={{ gridTemplateRows: `auto repeat(${Math.max(rank.top, rank.rows.length, 1)}, 1fr)` }}>
+      <div className="rank-table" style={{ gridTemplateRows: `auto repeat(${Math.max(rank.top, rank.rows.length, 1)}, 1fr)`, '--cols': columns.length }}>
         <div className="rank-row rank-headrow">
           <span className="no">#</span>
           <span className="bname">板块名称</span>
-          {RANK_COLUMNS.map((c) => (
+          {columns.map((c) => (
             <span key={c.key} className={c.key === rank.sort ? 'sorted' : ''}>{c.label}</span>
           ))}
         </div>
@@ -33,7 +34,7 @@ export default function RankPanel({ rank, state }) {
           <div className="rank-row" key={r.code}>
             <span className="no">{i + 1}</span>
             <span className="bname">{r.name}</span>
-            {RANK_COLUMNS.map((c) => (
+            {columns.map((c) => (
               <span key={c.key} className={`${c.trend(r[c.key])} ${c.key === rank.sort ? 'sorted' : ''}`}>{c.fmt(r[c.key])}</span>
             ))}
           </div>

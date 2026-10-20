@@ -24,6 +24,33 @@ export const MACRO_DATASETS = {
   },
 };
 
+/**
+ * iFinD 经济数据库（EDB）指标 ID → 上面 tushare 数据集的字段名，图表不用区分来源。
+ * 已逐期核对：数值、单位与 tushare 一致；edbScale = 换算到 tushare 单位的倍数。
+ * 没列出的字段（如 PMI 非制造业商务活动、综合 PMI 产出）仍由 tushare 补，见 server/adapters/ifind.js
+ * 货币供应量暂未映射：M0037864xx 系列是季度数据，需月度指标 ID
+ */
+export const MACRO_EDB = {
+  shibor: { on: 'M002816448', '1w': 'M002816449', '2w': 'M002816450', '1m': 'M002816451', '3m': 'M002816452', '6m': 'M002816453', '9m': 'M002816454', '1y': 'M002816455' },
+  lpr: { '1y': 'L004609506', '5y': 'L004609507' },
+  ust: { m1: 'L015211679', m3: 'L015211680', m6: 'L015211681', y1: 'L015211682', y2: 'L015211683', y3: 'L015211684', y5: 'L015211685', y7: 'L015211686', y10: 'L015211687', y20: 'L015211688', y30: 'L015211689' },
+  gdp: { gdp: 'M001620326', gdp_yoy: 'M002822183', pi_yoy: 'M002822184', si_yoy: 'M002822185', ti_yoy: 'M002822186' },
+  cpi: { nt_val: 'M001624503', nt_yoy: 'M002826730', nt_mom: 'M002826785' },
+  ppi: { ppi_yoy: 'M002826865', ppi_mom: 'M002842661', ppi_mp_yoy: 'M002826873' },
+  sf: { inc_month: 'M004891015', inc_cumval: 'M004891016', stk_endval: 'M004891020' },
+  pmi: { pmi010000: 'M002043802', pmi010400: 'M002043803', pmi010500: 'M002043804' },
+  // iFinD 是沪深两市（tushare 含北交所，约高 0.3%），单位亿元
+  margin: { rzye: 'S004273887', rzmre: 'S004273886', rqye: 'S004273889', rzrqye: 'S004273890', edbScale: 1e8 },
+};
+
+/** EDB 的日期 → 数据集 period：daily YYYYMMDD，month YYYYMM，quarter YYYYQn */
+export function edbPeriod(time, kind) {
+  const d = String(time).slice(0, 10);
+  if (kind === 'quarter') return `${d.slice(0, 4)}Q${Math.ceil(+d.slice(5, 7) / 3)}`;
+  if (kind === 'month') return d.slice(0, 7).replace('-', '');
+  return d.replaceAll('-', '');
+}
+
 /** 宏观页的分组与图表（view）。datasets = 这张图要用到的数据集 */
 export const MACRO_GROUPS = [
   { key: 'rates', label: '利率' },

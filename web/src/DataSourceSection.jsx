@@ -44,6 +44,8 @@ export default function DataSourceSection({ canSwitch }) {
     </div>
     <p className="note">切换后立即生效并保存，服务器日常同步也使用所选数据源。切换本身不触发拉取。</p>
     <p className="note">iFinD：境内指数、行业、概念、ETF 支持日线和分时；个股仅日线。新数据写入独立库，缺失历史读取 Tushare 旧库，统一不复权。</p>
+    <p className="note">宏观数据来自 iFinD 经济数据库，iFinD 没有的期数和指标用 Tushare 补。</p>
+    <p className="note">同花顺概念排行：板块列表、成分股、涨停来自 iFinD（常规概念），不展示主力净额；申万一级排行仍读 Tushare。</p>
     <p className="note">海外指数和期货尚未启用，需核对账号权限、代码和交易时段。</p>
     {info && !info.ifindConfigured && <p className="note">尚未配置 iFinD 凭证：可以切换查看已有历史；服务器配置 IFIND_REFRESH_TOKEN 后才能同步新数据。</p>}
     {!canSwitch && <p className="note">切换数据源需要管理员账号。</p>}

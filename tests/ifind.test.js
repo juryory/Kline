@@ -123,9 +123,10 @@ test('盘中不会将当天数据标记完成，dry-run 不调用接口', async(
   await syncIfind({...options,dryRun:true}); assert.equal(calls,0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ifind_progress').get().n,0);
 });
-test('iFinD 模式个股隐藏分钟，其余境内标的显示分时与分钟 K',()=>{
+test('iFinD 模式个股有分时、没有分钟 K，其余境内标的显示分时与分钟 K',()=>{
   const caps={intraday:true,minutes:false,indexOnly:true};
-  assert.deepEqual(periodsFor(caps,stock).map(p=>p.key),['D','W','M','Y']);
+  assert.deepEqual(periodsFor(caps,stock).map(p=>p.key),['T','D','W','M','Y']);
+  assert.ok(!periodsFor({...caps,minutes:true},stock).some(p=>p.key==='m5'));
   for(const symbol of [index,etf,board]) {
     assert.equal(periodsFor(caps,symbol)[0].key,'T');
     assert.ok(periodsFor({...caps,minutes:true},symbol).some(p=>p.key==='m5'));
@@ -233,4 +234,245 @@ test('板块排名同样读取 iFinD 优先历史，不使用另一源的缓存'
   writeIfind(db,'daily',board.code,[{date:20261016,open:10,high:11,low:10,close:11,vol:1,amount:1}]);
   assert.equal(computeRanking(db,'THN').rows[0].pct,0);
   assert.ok(Math.abs(computeRanking(db,'THN','merged_daily').rows[0].pct-10)<1e-9);
+});
+test('宏观 EDB：周期换算、单位换算、增量回看，按期合并时 iFinD 字段覆盖 tushare', async t => {
+  const { edbPeriod } = await import('../shared/macro.js');
+  const { syncIfindMacro } = await import('../server/ifind-macro.js');
+  const { mergeMacro } = await import('../server/adapters/ifind.js');
+  assert.equal(edbPeriod('2026-09-30', 'quarter'), '2026Q3');
+  assert.equal(edbPeriod('2026-09-30', 'month'), '202609');
+  assert.equal(edbPeriod('2026-10-20', 'daily'), '20261020');
+  const db = database(t), calls = [];
+  const client = { async edb(ids, start, end) {
+    calls.push({ ids, start, end });
+    const series = Object.fromEntries(ids.map(id => [id, [{ time: '2026-09-30', value: id === 'S004273887' ? '2.5' : '50.1' }, { time: '2026-08-31', value: '' }]]));
+    return { series, cells: ids.length };
+  } };
+  const first = await syncIfindMacro({ db, client, now, log: () => {}, years: 5 });
+  assert.equal(first.failed, false);
+  assert.equal(calls[0].start, '2021-10-16');
+  const margin = JSON.parse(db.prepare("SELECT data FROM ifind_macro WHERE dataset='margin' AND period='20260930'").get().data);
+  assert.equal(margin.rzye, 2.5e8);
+  const pmi = db.prepare("SELECT period, data FROM ifind_macro WHERE dataset='pmi'").all();
+  assert.deepEqual(pmi.map(r => r.period), ['202609']);
+  calls.length = 0;
+  assert.equal((await syncIfindMacro({ db, client, now, log: () => {} })).skipped, true); // 每天一次
+  assert.equal(calls.length, 0);
+  await syncIfindMacro({ db, client, now, log: () => {}, force: true });
+  assert.equal(calls.find(c => c.ids.includes('M002043802')).start, '2025-07-28');
+  const merged = mergeMacro(
+    [{ period: '202608', data: '{"pmi010000":49.5,"pmi020100":50.3}' }, { period: '202609', data: '{"pmi010000":49.9,"pmi020100":50.6}' }],
+    pmi);
+  assert.deepEqual(merged.map(r => [r.period, r.pmi010000, r.pmi020100]), [['202608', 49.5, 50.3], ['202609', 50.1, 50.6]]);
+});
+test('EDB 客户端解析返回表，不把 token 放进请求体', async () => {
+  const calls = [];
+  const client = createIfindClient({ accessToken: 'test-access', intervalMs: 0, fetchImpl: async (url, opt) => {
+    calls.push({ url, opt });
+    return new Response(JSON.stringify({ errorcode: 0, dataVol: 2, tables: [{ id: ['M1'], time: ['2026-09-30'], value: ['1.5'], index_name: ['x'] }, { id: ['M2'] }] }));
+  } });
+  const { series, cells } = await client.edb(['M1', 'M2'], '2026-01-01', '2026-10-20');
+  assert.ok(calls[0].url.endsWith('/edb_service'));
+  assert.equal(calls[0].opt.headers.access_token, 'test-access');
+  assert.ok(!calls[0].opt.body.includes('test-access'));
+  assert.deepEqual(series, { M1: [{ time: '2026-09-30', value: '1.5' }] });
+  assert.equal(cells, 2);
+});
+test('概念板块：只取常规概念、按名称查指数代码并缓存、成分股入库、每周一次、异常空树不清空', async t => {
+  const { refreshConceptBoards } = await import('../server/ifind-boards.js');
+  const db = database(t), lookups = [];
+  const leaves = Array.from({ length: 120 }, (_, i) => ({ p03321_f001: `概念${i}`, p03321_f003: `001042_${300000 + i}`, p03321_f004: '001042' }));
+  let tree = [{ p03321_f001: '常规概念', p03321_f003: '001042', p03321_f004: '001042_1' }, ...leaves,
+    { p03321_f001: '新兴题材', p03321_f003: '001042002_1', p03321_f004: '001042002' }];
+  const client = {
+    async report(name, para) {
+      if (name === 'p03321') return tree;
+      return para.blockname === '001042_300000' ? [{ p03291_f002: '600000.SH' }, { p03291_f002: '000001.SZ' }] : [];
+    },
+    async thscode(secname, exact = true) {
+      lookups.push(secname);
+      const i = +secname.slice(2);
+      if (i === 119) return { codes: ['3085.TWO'], multiple: false };
+      // 同名多个品种：精确匹配不给候选，模糊匹配列出全部
+      if (i === 1) return exact ? { codes: [], multiple: true } : { codes: ['885001.TI', '864024.TI'], multiple: false };
+      // 模糊匹配仍不唯一时用 tushare 同名板块
+      if (i === 2) return exact ? { codes: [], multiple: true } : { codes: ['885002.TI', '885998.TI'], multiple: false };
+      return { codes: [`${885000 + i}.TI`], multiple: false };
+    },
+  };
+  db.exec("INSERT INTO symbols VALUES ('885777.TI','概念2','index','THN')");
+  const first = await refreshConceptBoards({ db, client, now, log: () => {} });
+  assert.deepEqual([first.boards, first.withCode, first.members], [120, 119, 2]);
+  assert.equal(db.prepare("SELECT code FROM ifind_boards WHERE name='概念119'").get().code, null);
+  assert.equal(db.prepare("SELECT code FROM ifind_boards WHERE name='概念1'").get().code, '885001.TI');
+  assert.equal(db.prepare("SELECT code FROM ifind_boards WHERE name='概念2'").get().code, '885777.TI');
+  assert.equal(db.prepare("SELECT category FROM ifind_symbols WHERE code='885000.TI'").get().category, 'THN');
+  assert.ok(!lookups.includes('新兴题材'));
+  assert.equal((await refreshConceptBoards({ db, client, now, log: () => {} })).skipped, true);
+  lookups.length = 0;
+  await refreshConceptBoards({ db, client, now, log: () => {}, force: true });
+  assert.deepEqual(lookups, ['概念119']); // 只重查上次没查到的（同一名称一次）
+  tree = tree.slice(0, 5);
+  await assert.rejects(refreshConceptBoards({ db, client, now, log: () => {}, force: true }), /疑似异常/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ifind_boards").get().n, 120);
+});
+test('日线同步记录个股涨停，重拉时覆盖旧状态，非个股不记', async t => {
+  const db = database(t);
+  let status = '涨停';
+  const options = { db, now, startDate: '2026-10-16', endDate: '2026-10-16', symbols: [stock, index], log: () => {},
+    client: { query: async (kind, codes, day) => ({ cells: codes.length * 7,
+      rows: kind === 'daily' ? codes.map(c => ({ ...raw(c, day), ths_up_and_down_status_stock: c === stock.code ? status : '涨停' })) : [] }) } };
+  await syncIfind(options);
+  assert.deepEqual(db.prepare('SELECT date, code FROM ifind_limit_up').all().map(r => ({ ...r })), [{ date: 20261016, code: stock.code }]);
+  db.exec('DELETE FROM ifind_progress'); status = '非涨跌停';
+  await syncIfind(options);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ifind_limit_up').get().n, 0);
+});
+test('iFinD 概念排行：iFinD 日线优先、缺的日期用 tushare 补，涨停数来自 iFinD 成分股，主力净额隐藏', async t => {
+  const { computeIfindRanking } = await import('../server/rank.js');
+  const db = database(t); clearRankingCache();
+  assert.throws(() => computeIfindRanking(db), /概念板块列表/);
+  db.exec(`INSERT INTO ifind_boards VALUES ('THN','b1','概念A','885001.TI'),('THN','b2','概念B','885002.TI'),('THN','b3','无指数',NULL);
+    INSERT INTO daily VALUES ('885001.TI',20251231,8,8,8,8,1,1),('885001.TI',20261012,10,10,10,10,1,1),('885001.TI',20261013,10,10,10,10,1,1),
+      ('885001.TI',20261014,10,10,10,10,1,1),('885001.TI',20261015,10,10,10,10,1,1),('885002.TI',20261015,5,5,5,5,1,1);
+    INSERT INTO ifind_members VALUES ('885001.TI','600000.SH'),('885001.TI','000001.SZ'),('885002.TI','000001.SZ');
+    INSERT INTO ifind_limit_up VALUES (20261016,'600000.SH');`);
+  writeIfind(db, 'daily', '885001.TI', [{ date: 20261015, open: 10, high: 10, low: 10, close: 10, vol: 1, amount: 1 },
+    { date: 20261016, open: 11, high: 11, low: 11, close: 11, vol: 1, amount: 1 }]);
+  const r = computeIfindRanking(db);
+  assert.equal(r.date, 20261016);
+  assert.deepEqual(r.hidden, ['mainNet']);
+  assert.equal(r.rows.length, 1); // 概念B 当天无行情，无指数代码的不参与
+  const a = r.rows[0];
+  assert.ok(Math.abs(a.pct - 10) < 1e-9);
+  assert.ok(Math.abs(a.ytd - 37.5) < 1e-9);
+  assert.equal(a.pct5, null);
+  assert.equal(a.limitUp, 1);
+  assert.equal(a.mainNet, null);
+});
+test('实时排行行情：开盘前/周末不请求，交易中按 1 分钟缓存，午休收盘沿用，节假日不当作今天，失败沿用并退避，计入周额度', async t => {
+  const { liveQuotes, resetLive } = await import('../server/ifind-live.js');
+  const db = database(t); resetLive(); t.after(resetLive);
+  const at = (hm, day = '2026-10-16') => Date.parse(`${day}T${hm}:00+08:00`);
+  let calls = 0, tradeDate = '2026-10-16', fail = false;
+  const client = { async realtime(codes) {
+    calls++;
+    if (fail) throw new Error('网络失败');
+    return { cells: codes.length * 5, rows: codes.map(code => ({ code, tradeDate, tradeTime: '10:00:03', latest: 11, changeRatio: 10, upLimitCount: 3 })) };
+  } };
+  const opts = (now) => ({ db, client, codes: ['885001.TI', '885002.TI'], now, quota: { profile: 'trial', total: 1000, history: 100, reserve: 10 } });
+  assert.equal(await liveQuotes(opts(at('09:00'))), null);
+  assert.equal(await liveQuotes(opts(at('10:00', '2026-10-17'))), null); // 周六
+  assert.equal(calls, 0);
+  const first = await liveQuotes(opts(at('10:00')));
+  assert.equal(first.date, 20261016);
+  assert.equal(first.quotes.get('885001.TI').upLimitCount, 3);
+  await liveQuotes(opts(at('10:00') + 30_000));
+  assert.equal(calls, 1);
+  await liveQuotes(opts(at('10:01') + 1000));
+  assert.equal(calls, 2);
+  await liveQuotes(opts(at('12:00'))); await liveQuotes(opts(at('16:00')));
+  assert.equal(calls, 2); // 午休、收盘后沿用
+  assert.equal(db.prepare("SELECT cells FROM ifind_weekly_usage WHERE kind='realtime'").get().cells, 20);
+  fail = true;
+  assert.equal((await liveQuotes(opts(at('14:00')))).date, 20261016); // 失败沿用当天结果
+  await liveQuotes(opts(at('14:00') + 10_000));
+  assert.equal(calls, 3); // 退避期内不再请求
+  resetLive(); fail = false; tradeDate = '2026-09-30';
+  assert.equal(await liveQuotes(opts(at('10:00', '2026-10-05'))), null); // 节假日返回上个交易日
+  await liveQuotes(opts(at('10:05', '2026-10-05')));
+  assert.equal(calls, 4);
+});
+test('iFinD 概念排行接入实时行情：最新价接在历史后面，涨幅和涨停家数用实时值；库里已有当天日线时用库里', async t => {
+  const { computeIfindRanking } = await import('../server/rank.js');
+  const db = database(t); clearRankingCache();
+  db.exec(`INSERT INTO ifind_boards VALUES ('THN','b1','概念A','885001.TI'),('THN','b2','概念B','885002.TI');
+    INSERT INTO daily VALUES ('885001.TI',20251231,8,8,8,8,1,1),('885001.TI',20261009,9,9,9,9,1,1),('885001.TI',20261012,10,10,10,10,1,1),
+      ('885001.TI',20261013,10,10,10,10,1,1),('885001.TI',20261014,10,10,10,10,1,1),('885001.TI',20261015,10,10,10,10,1,1),
+      ('885002.TI',20261015,5,5,5,5,1,1);`);
+  const live = { date: 20261016, time: '10:00:03', quotes: new Map([
+    ['885001.TI', { latest: 11, changeRatio: 10, upLimitCount: 3 }], ['885002.TI', { latest: null, changeRatio: null, upLimitCount: null }]]) };
+  const r = computeIfindRanking(db, live);
+  assert.equal(r.date, 20261016);
+  assert.equal(r.liveAt, '10:00:03');
+  assert.equal(r.rows.length, 1); // 无实时价的不参与
+  const a = r.rows[0];
+  assert.equal(a.pct, 10);
+  assert.ok(Math.abs(a.pct5 - (11 / 9 - 1) * 100) < 1e-9);
+  assert.ok(Math.abs(a.ytd - 37.5) < 1e-9);
+  assert.equal(a.limitUp, 3);
+  writeIfind(db, 'daily', '885001.TI', [{ date: 20261016, open: 11, high: 11, low: 11, close: 11.5, vol: 1, amount: 1 }]);
+  clearRankingCache();
+  const after = computeIfindRanking(db, live);
+  assert.equal(after.liveAt, undefined);
+  assert.equal(after.rows[0].close, 11.5);
+});
+test('按需分时：只取已走完的分钟并与上一根重叠，20 秒内不重复请求，午休不请求，收盘后取到 15:00，节假日取上个交易日，写库供盘后复用', async t => {
+  const { refreshMinutes, resetLive } = await import('../server/ifind-live.js');
+  const db = database(t); resetLive(); t.after(resetLive);
+  const at = (hms, day = '2026-10-16') => Date.parse(`${day}T${hms}+08:00`);
+  const windows = [];
+  const client = {
+    async tradeDates() { return ['2026-09-30', '2026-10-15', '2026-10-16']; },
+    async query(kind, codes, day, w) {
+      windows.push(`${day} ${w.from}-${w.to}`);
+      const rows = [];
+      for (let ts = Date.parse(`${day}T${w.from}+08:00`); ts <= Date.parse(`${day}T${w.to}+08:00`); ts += 60_000) {
+        rows.push(raw(codes[0], new Date(ts + 8 * 3600_000).toISOString().slice(0, 19).replace('T', ' ')));
+      }
+      return { cells: rows.length * 6, rows };
+    },
+  };
+  const quota = { profile: 'trial', total: 10_000_000, history: 100, reserve: 10 };
+  const run = (now) => refreshMinutes({ db, client, symbol: stock, now, quota });
+  assert.equal(await run(at('09:20:00')), true); // 开盘前：取上个交易日
+  assert.deepEqual(windows, ['2026-10-15 09:30:00-15:00:00']);
+  resetLive(); windows.length = 0;
+  await run(at('10:05:30'));
+  assert.deepEqual(windows, ['2026-10-16 09:30:00-10:04:00']);
+  await run(at('10:05:40'));
+  assert.equal(windows.length, 1); // 20 秒内不重复请求
+  await run(at('10:10:30'));
+  assert.equal(windows[1], '2026-10-16 10:04:00-10:09:00'); // 与上一根重叠
+  await run(at('11:31:30'));
+  await run(at('12:00:00'));
+  assert.equal(windows.length, 3); // 午休不请求
+  await run(at('16:00:00'));
+  assert.equal(windows[3], '2026-10-16 11:30:00-15:00:00');
+  await run(at('16:30:00'));
+  assert.equal(windows.length, 4); // 当天已取全
+  const saved = db.prepare('SELECT COUNT(*) AS n FROM ifind_minute WHERE code = ? AND ts BETWEEN ? AND ?').get(stock.code, at('09:30:00'), at('15:00:00')).n;
+  assert.equal(saved, 242); // 09:30—11:30 共 121 根 + 13:00—15:00 共 121 根，午休时段不入库
+  assert.equal(db.prepare("SELECT cells FROM ifind_weekly_usage WHERE kind = 'live_minute'").get().cells > 0, true);
+  resetLive(); windows.length = 0;
+  await run(at('10:00:00', '2026-10-05')); // 节假日
+  assert.deepEqual(windows, ['2026-09-30 09:30:00-15:00:00']);
+});
+test('今天的实时日K：拼在库里日线后面，库里已有当天日线时不拼，节假日不拼', async t => {
+  const { liveDailyBar, resetLive } = await import('../server/ifind-live.js');
+  const { withLiveBar } = await import('../server/adapters/ifind.js');
+  resetLive(); t.after(resetLive);
+  const db = database(t);
+  let tradeDate = '2026-10-16';
+  const client = {
+    async tradeDates() { return ['2026-10-15', '2026-10-16']; },
+    async realtime(codes) { return { cells: 7, rows: [{ code: codes[0], tradeDate, open: 10, high: 12, low: 9, latest: 11, volume: 34135, amount: 4525399000 }] }; },
+  };
+  const now = Date.parse('2026-10-16T10:00:00+08:00');
+  const bar = await liveDailyBar({ db, client, symbol: stock, now, quota: { profile: 'free' } });
+  assert.deepEqual([bar.date, bar.close, bar.volume, bar.turnover], [20261016, 11, 34135, 4525399000]);
+  const stored = [{ timestamp: Date.parse('2026-10-15T00:00:00+08:00'), close: 10 }];
+  assert.deepEqual(withLiveBar(stored, bar).map(b => b.dataSource), [undefined, 'ifind-live']);
+  assert.equal(withLiveBar([...stored, { timestamp: bar.timestamp, close: 11.2 }], bar).at(-1).close, 11.2);
+  resetLive(); tradeDate = '2026-10-15';
+  assert.equal(await liveDailyBar({ db, client, symbol: stock, now, quota: { profile: 'free' } }), null);
+});
+test('盘后同步 15:30 后才同步当天日线', async t => {
+  const db = database(t), days = [];
+  const client = { query: async (kind, codes, day) => { days.push(day); return { cells: 7, rows: [raw(codes[0], day)] }; } };
+  const opts = { db, client, symbols: [stock], log: () => {}, startDate: '2026-10-16' };
+  await assert.rejects(syncIfind({ ...opts, endDate: '2026-10-16', now: Date.parse('2026-10-16T15:20:00+08:00') }), /15:30 前截止/);
+  const r = await syncIfind({ ...opts, now: Date.parse('2026-10-16T15:40:00+08:00') });
+  assert.equal(r.end, '2026-10-16');
+  assert.deepEqual(days, ['2026-10-16']);
 });

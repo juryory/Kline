@@ -18,9 +18,15 @@ export { PERIODS, PRIMARY_PERIODS, isMinutePeriod } from '../../shared/periods.j
 export const periodsFor = (status, symbol = null) =>
   periodsForCaps({ intraday: status?.intraday !== false, minutes: !!status?.minutes, indexOnly: status?.indexOnly }, symbol);
 
+/** 键盘可切换的周期：跳过分钟 K（只能点周期按钮进入），日K 和分时直接相邻 */
+export const keyPeriods = (list = PERIODS) => list.filter((p) => p.kind !== 'minute');
+
+/** 回车（dir = -1）更细、Backspace（dir = 1）更粗；在分钟 K 上时回车进分时、Backspace 回日K */
 export function stepPeriod(period, dir, list = PERIODS) {
-  const i = list.findIndex((p) => p.key === period);
-  return list[Math.min(list.length - 1, Math.max(0, i + dir))].key;
+  const keys = keyPeriods(list);
+  const i = keys.findIndex((p) => p.key === period);
+  if (i < 0) return (dir < 0 ? keys[0] : keys.find((p) => p.key === 'D') ?? keys[0]).key;
+  return keys[Math.min(keys.length - 1, Math.max(0, i + dir))].key;
 }
 
 /** 视图 → 最右一根的下标 */

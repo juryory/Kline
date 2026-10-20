@@ -62,7 +62,7 @@
 }
 .panel .rank-row {
   display: grid; align-items: center; column-gap: calc(8px * var(--s));
-  grid-template-columns: 2em minmax(6em, 1.6fr) repeat(7, 1fr);
+  grid-template-columns: 2em minmax(6em, 1.6fr) repeat(var(--cols, 7), 1fr);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .panel .rank-row > span { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -27,6 +27,7 @@ import adapter, { adapterName, switchAdapter, sourceInfo } from './adapters/inde
 import { findSymbol, defaultSymbol, loadUniverse, search, publicSymbol } from './symbols.js';
 import { getDaily, getIntraday, getMinutes, aggregate, clearMarketCache } from './market.js';
 import { periodsFor, findPeriod } from '../shared/periods.js';
+import { marketPhase } from './ifind-live.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows, clearRankingCache } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
@@ -260,8 +261,11 @@ async function loadRank() {
   try {
     const r = await adapter.getRanking(list);
     if (source !== adapterName) return;
-    const rows = sortRows(r.rows, sort, desc).slice(0, top);
-    const msg = { type: 'rank', list, listName: r.listName, date: r.date, sort, desc, top, rows };
+    // 当前数据源不提供的列（如 iFinD 没有主力净额）不展示，按它排序时改按涨幅
+    const hidden = r.hidden ?? [];
+    const by = hidden.includes(sort) ? 'pct' : sort;
+    const rows = sortRows(r.rows, by, desc).slice(0, top);
+    const msg = { type: 'rank', list, listName: r.listName, date: r.date, liveAt: r.liveAt, sort: by, desc, top, rows, hidden };
     if (JSON.stringify(msg) !== JSON.stringify(currentRank)) {
       currentRank = msg;
       broadcast(msg);
@@ -579,6 +583,13 @@ server.listen(PORT, HOST, () => {
 });
 
 setInterval(() => { if (state.period !== 'T') loadData({ force: true }); loadRank(); }, REFRESH_MS);
+// iFinD 盘中实时：排行上屏时每分钟刷新；日K / 分钟 K 交易中每分钟刷新（分时另按 INTRADAY_REFRESH_MS）。
+// 只请求当前标的，实时数据本身有缓存（见 server/ifind-live.js），盘外直接用缓存
+setInterval(() => {
+  if (adapterName !== 'ifind') return;
+  loadRank();
+  if (state.period !== 'T' && marketPhase() === 'session') loadData({ force: true });
+}, +(process.env.IFIND_LIVE_RANK_MS || 60_000));
 // 定期重新载入标的池：盘后同步新增的股票 / 同花顺概念不用重启服务就能检索到
 setInterval(() => loadUniverse(adapter), +(process.env.UNIVERSE_REFRESH_MS || 30 * 60_000));
 setInterval(() => { if (state.period === 'T') loadData({ force: true }); }, INTRADAY_REFRESH_MS);

@@ -14,15 +14,26 @@ export default function RankBrowser({ active, rank, setRank, onOpen, syncedAt })
 
   useEffect(() => setTopDraft(String(top)), [top]);
 
-  // 切换列表、后台定时同步完成（syncedAt 变化）时重新拉取
+  // 盘中实时排行：页面打开时每分钟重新拉（服务端有缓存，盘外不访问数据源）
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [active]);
+
+  // 切换列表、后台定时同步完成（syncedAt 变化）、每分钟刷新时重新拉取
   useEffect(() => {
     fetch(`/api/rank?list=${list}`)
       .then((r) => r.json())
       .then(setRes)
       .catch((err) => setRes({ error: err.message }));
-  }, [list, syncedAt]);
+  }, [list, syncedAt, tick]);
 
-  const rows = useMemo(() => (res?.rows ? sortRows(res.rows, sort, desc) : []), [res, sort, desc]);
+  // 当前数据源不提供的列（如 iFinD 没有主力净额）不展示，按它排序时改按涨幅
+  const columns = RANK_COLUMNS.filter((c) => !res?.hidden?.includes(c.key));
+  const by = res?.hidden?.includes(sort) ? 'pct' : sort;
+  const rows = useMemo(() => (res?.rows ? sortRows(res.rows, by, desc) : []), [res, by, desc]);
 
   // 前 N 名：输入完回车或失焦时提交（3~30）
   const commitTop = () => {
@@ -80,12 +91,12 @@ export default function RankBrowser({ active, rank, setRank, onOpen, syncedAt })
           名
         </label>
         <span className="spacer" />
-        {res?.date && <span className="muted">数据日期 {fmtDate(res.date)} · 共 {rows.length} 个</span>}
+        {res?.date && <span className="muted">数据日期 {fmtDate(res.date)}{res.liveAt ? ` · 实时 ${res.liveAt.slice(0, 5)}` : ''} · 共 {rows.length} 个</span>}
       </div>
 
       {res?.marketDate && res.date < res.marketDate && (
         <div className="rank-stale">
-          板块行情只到 {fmtDate(res.date)}，个股行情已到 {fmtDate(res.marketDate)}：tushare 还没发布当天的板块数据。
+          板块行情只到 {fmtDate(res.date)}，个股行情已到 {fmtDate(res.marketDate)}：当天的板块数据还没发布。
           后台收盘后定时同步，发布后会自动补上（设置 → 数据同步 可看每次同步记录）。
         </div>
       )}
@@ -99,9 +110,9 @@ export default function RankBrowser({ active, rank, setRank, onOpen, syncedAt })
               <tr>
                 <th className="no">#</th>
                 <th className="bname">板块名称</th>
-                {RANK_COLUMNS.map((c) => (
-                  <th key={c.key} className={c.key === sort ? 'sorted' : ''} onClick={() => clickHeader(c.key)}>
-                    {c.label}{c.key === sort ? (desc ? ' ↓' : ' ↑') : ''}
+                {columns.map((c) => (
+                  <th key={c.key} className={c.key === by ? 'sorted' : ''} onClick={() => clickHeader(c.key)}>
+                    {c.label}{c.key === by ? (desc ? ' ↓' : ' ↑') : ''}
                   </th>
                 ))}
               </tr>
@@ -116,7 +127,7 @@ export default function RankBrowser({ active, rank, setRank, onOpen, syncedAt })
                 >
                   <td className="no">{i + 1}</td>
                   <td className="bname">{r.name}</td>
-                  {RANK_COLUMNS.map((c) => (
+                  {columns.map((c) => (
                     <td key={c.key} className={c.trend(r[c.key])}>{c.fmt(r[c.key])}</td>
                   ))}
                 </tr>

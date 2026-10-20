@@ -38,9 +38,11 @@ export const isIfindDomestic = s => !!s && ['stock','index','etf'].includes(s.ty
  * symbol 不传时不按标的过滤
  */
 export function periodsFor(caps = {}, symbol = null) {
+  // iFinD（indexOnly）：境内标的都有分时（个股盘中按需拉取）；分钟 K 需要历史分钟，个股暂不提供
+  const intradayOk = symbol ? (caps.indexOnly ? isIfindDomestic(symbol) : hasMinuteData(symbol)) : true;
   const minuteOk = symbol ? (caps.indexOnly ? isIfindDomestic(symbol) && symbol.type !== 'stock' : hasMinuteData(symbol)) : true;
   return PERIODS.filter((p) => {
-    if (p.kind === 'intraday') return caps.intraday !== false && minuteOk;
+    if (p.kind === 'intraday') return caps.intraday !== false && intradayOk;
     if (p.kind === 'minute') return !!caps.minutes && minuteOk;
     return true;
   });

@@ -1,5 +1,6 @@
 // 行情缓存 + 周期聚合。缓存日线 / 分时 / 分钟 K，周 / 月 / 年线由日线现算。
 import adapter, { adapterName } from './adapters/index.js';
+import { marketPhase } from './ifind-live.js';
 
 const TTL = +(process.env.CACHE_TTL_MS || 5 * 60_000);
 const cache = new Map(); // code -> { bars, at } | { pending }
@@ -8,7 +9,9 @@ export async function getDaily(symbol, { force = false } = {}) {
   const key = `${adapterName}:${symbol.code}`;
   const hit = cache.get(key);
   if (hit?.pending) return hit.pending;
-  if (!force && hit && Date.now() - hit.at < TTL) return hit.bars;
+  // iFinD 盘中日线带今天的实时日K，缓存缩短到 1 分钟
+  const ttl = adapterName === 'ifind' && marketPhase() === 'session' ? Math.min(TTL, 60_000) : TTL;
+  if (!force && hit && Date.now() - hit.at < ttl) return hit.bars;
 
   const pending = adapter
     .getDaily(symbol)

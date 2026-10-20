@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { BUILTIN_INDICES } from './symbols.js';
 import { tx } from './db.js';
 import { initIfind, writeIfind } from './ifind-store.js';
-import { createIfindClient, chinaDate, dateNumber, normalizeIfind } from './ifind-client.js';
+import { createIfindClient, chinaDate, dateNumber, normalizeIfind, LIMIT_FIELD } from './ifind-client.js';
 import { quotaConfig, reserveWeekly, reconcileWeekly, validateQuota } from './ifind-budget.js';
 import { isIfindDomestic } from '../shared/periods.js';
 
@@ -95,11 +95,13 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
   }
   const unsupported = symbols.filter(s => !isDomesticSymbol(s)).map(s=>s.code);
   symbols = symbols.filter(isDomesticSymbol);
-  const hour = new Date(now + 8 * 3600_000).getUTCHours();
-  // 不保存盘中未完成的日线/分钟为已完成，18 点以前只同步前一日。
-  const cutoff = chinaDate(now - (mode !== 'intraday' && hour < 18 ? 86400_000 : 0));
+  // 不保存盘中未完成的日线/分钟为已完成：IFIND_CLOSE_CUTOFF（默认 15:30，避开科创板 / 创业板盘后固定价格交易）以前只同步前一日
+  const [ch, cm] = (process.env.IFIND_CLOSE_CUTOFF || '15:30').split(':').map(Number);
+  const clockNow = new Date(now + 8 * 3600_000);
+  const beforeClose = clockNow.getUTCHours() * 60 + clockNow.getUTCMinutes() < ch * 60 + cm;
+  const cutoff = chinaDate(now - (mode !== 'intraday' && beforeClose ? 86400_000 : 0));
   const end = endDate || cutoff;
-  if (end > cutoff) throw new Error('只允许同步已收盘日期；18 点前截止到前一天');
+  if (end > cutoff) throw new Error(`只允许同步已收盘日期；${process.env.IFIND_CLOSE_CUTOFF || '15:30'} 前截止到前一天`);
   if (mode === 'intraday' && end !== chinaDate(now)) throw new Error('盘中模式只允许当天日期');
   const starts = {}, datesByKind = {};
   const yearsAgo = (years) => {
@@ -118,10 +120,13 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
     // 新数据优先，补历史时不会因额度用完而漏掉今天。
     datesByKind[kind] = datesBetween(starts[kind], end).reverse();
   }
-  const result = { mode, daily: 0, minute: 0, requests: 0, estimatedCells: 0, pending: 0, reusedDaily: 0, unsupported, deferred: false, errors: [], starts, end };
+  // failed：额度/接口异常导致中止；pending、unsupported 只是提示，不算失败
+  const result = { mode, daily: 0, minute: 0, requests: 0, estimatedCells: 0, pending: 0, reusedDaily: 0, unsupported, deferred: false, failed: false, errors: [], starts, end };
   if (unsupported.length) result.errors.push(`${unsupported.length} 个标的不在已实现的境内范围，未请求；见 unsupported 清单`);
   const progress = db.prepare('SELECT complete,attempted_at FROM ifind_progress WHERE kind=? AND code=? AND date=?');
   const mark = db.prepare('INSERT OR REPLACE INTO ifind_progress VALUES (?,?,?,?,?)');
+  const delLimit = db.prepare('DELETE FROM ifind_limit_up WHERE date=? AND code=?');
+  const putLimit = db.prepare('INSERT INTO ifind_limit_up VALUES (?,?)');
   log(`[ifind] ${mode} 日线 ${starts.daily} 起 ${symbols.length} 个；分时 ${starts.minute} 起 ${symbols.filter(isMinuteIndex).length} 个境内指数/板块/ETF；截止 ${end}，个股不拉分时`);
   const oldDaily = db.prepare('SELECT 1 FROM daily WHERE code=? AND date=?');
   const lastMinute = db.prepare('SELECT MAX(ts) AS ts FROM ifind_minute WHERE code=? AND ts>=? AND ts<=?');
@@ -169,7 +174,8 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
         }
         const estimatedMinutes = window
           ? Math.min(242, Math.ceil((Date.parse(`${day}T${window.to}+08:00`)-Date.parse(`${day}T${window.from}+08:00`))/60_000)+1) : 242;
-        const estimate = batch.length * 6 * (kind === 'minute' ? estimatedMinutes : 1);
+        // 日线 6 个行情字段 + 涨跌停状态
+        const estimate = batch.length * (kind === 'minute' ? 6 * estimatedMinutes : 7);
         result.estimatedCells += estimate;
         if (dryRun) { result.requests++; continue; }
         const budgetNow = now + Date.now() - wallStart;
@@ -180,7 +186,7 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
           if (quota.profile === 'trial') week = reserveWeekly(db, budgetNow, lane, kind, estimate, quota);
           else reserveBudget(db, month, kind, estimate, budgets[kind]);
         }
-        catch (err) { result.errors.push(err.message); log(err.message); stopped = true; break; }
+        catch (err) { result.errors.push(err.message); log(err.message); result.failed = true; stopped = true; break; }
         let response;
         try {
           result.requests++;
@@ -194,9 +200,9 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
         } catch (err) {
           result.errors.push(err.message); log(`[ifind] ${kind} ${day}：${err.message}`);
           // 权限/格式/网络异常停止该类型，防止全市场反复请求；另一类型仍可继续。
-          stopped = true; break;
+          result.failed = true; stopped = true; break;
         }
-        const grouped = new Map();
+        const grouped = new Map(), limitUp = new Set();
         for (const row of response.rows) {
           const s = remote.get(row.code);
           if (!s) continue;
@@ -210,6 +216,7 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
             const hm = String(row.time).slice(11, 16);
             if (!(hm >= '09:30' && hm <= '11:30' || hm >= '13:00' && hm <= '15:00')) continue;
           }
+          if (kind === 'daily' && s.type === 'stock' && row[LIMIT_FIELD] === '涨停') limitUp.add(s.code);
           if (!grouped.has(s.code)) grouped.set(s.code, new Map());
           grouped.get(s.code).set(normalized.ts, normalized);
         }
@@ -219,6 +226,10 @@ export async function syncIfind({ db, client = createIfindClient(), now = Date.n
             // 指数正常全天至少 240 根；缺根/截断保留数据但继续补。
             const complete = mode === 'intraday' ? false : kind === 'daily' ? rows.length === 1 : completeMinuteDay(rows, day);
             writeIfind(db, kind, s.code, rows);
+            if (kind === 'daily' && s.type === 'stock' && rows.length) {
+              delLimit.run(date, s.code);
+              if (limitUp.has(s.code)) putLimit.run(date, s.code);
+            }
             mark.run(kind, s.code, date, complete ? 1 : 0, now);
             result[kind] += rows.length;
             if (!complete && mode !== 'intraday') result.pending++;

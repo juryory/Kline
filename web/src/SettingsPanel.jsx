@@ -71,7 +71,7 @@ function SyncSection() {
       {info?.quota?.profile === 'trial' && <p className="note">
         iFinD 本周本机预留/使用：{info.quota.used.toLocaleString()} / {info.quota.total.toLocaleString()} 单元格，
         其中补历史 {info.quota.historyUsed.toLocaleString()}；保留额度 {info.quota.reserve.toLocaleString()}。
-        不包含其他终端用量，以官方账户为准。盘中分钟同步{info.intraday ? '已启用（串行运行，忙时顺延）' : '未启用'}。
+        不包含其他终端用量，以官方账户为准。盘中实时数据按需拉取：只请求正在查看的标的和排行，不看的不更新。
       </p>}
       {info?.latest && <p className="note">
         iFinD 已保存日期：{datasets.map(([key,label]) => `${label} ${fmtMd(info.latest[key])}${
