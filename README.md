@@ -262,7 +262,9 @@ ETF 日线默认参与 `npm run sync` 和定时同步；不配置 `SYNC_ETF` 时
 - **iFinD 模式统一不复权**，包括补入的 Tushare 原始历史，避免跨供应商复权错配。
   Tushare 模式保持原来的股票/ETF 前复权。图表来源标签明确说明口径，API `bars[].dataSource` 标记每条实际来源。
 - 排名价格使用同样的合并日线；资金流、涨停、成分股、宏观和领先指标仍读取已有 Tushare 本地数据，本轮 iFinD 同步不更新它们。
-- 港股指数、美股指数和期货尚未启用。候选清单示例在 `config/ifind-universe.example.json`，
+- **期货 / 外汇只有日 K**（含周 K、月 K、年 K）：沪金、沪银、原油（上期能源）、沪铜主力连续，布伦特原油，伦敦金现货，美元指数，
+  美元兑离岸人民币，见 `server/ifind-futures.js` 和 `docs/ifind-rollout.md` 第 7 节。没有分时和分钟 K。
+- 港股指数、美股指数尚未启用。候选清单示例在 `config/ifind-universe.example.json`，
   可通过 `IFIND_UNIVERSE_FILE` 保留清单，`enabled=false` 不导入。当前只接受启用境内 CN 标的。
   海外/期货需要另行验证代码、历史权限、夏令时、夜盘归属及前端交易时段；不能套用 A 股分钟规则。
 

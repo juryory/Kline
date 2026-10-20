@@ -507,7 +507,7 @@ function handleHttp(req, res) {
     const period = url.searchParams.get('period');
     if (!symbol) return sendJson(res, { error: `未知标的 ${url.searchParams.get('symbol')}` });
     if (!PERIODS.includes(period)) return sendJson(res, { error: `不支持的周期 ${period}` });
-    if (!periodOk(period, symbol)) return sendJson(res, { error: `${symbol.name} 没有${findPeriod(period).label}数据（板块不提供分钟线）` });
+    if (!periodOk(period, symbol)) return sendJson(res, { error: `${symbol.name} 没有${findPeriod(period).label}数据（板块、期货、外汇不提供分钟线）` });
     buildData(symbol, period)
       .then((msg) => sendJson(res, msg))
       .catch((err) => sendJson(res, { error: `${symbol.code}: ${err.message}` }));

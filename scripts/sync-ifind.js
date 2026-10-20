@@ -4,6 +4,7 @@ import { openIfindDb, IFIND_DB_PATH } from '../server/ifind-db.js';
 import { syncIfind } from '../server/ifind-sync.js';
 import { syncIfindMacro } from '../server/ifind-macro.js';
 import { refreshConceptBoards } from '../server/ifind-boards.js';
+import { syncFutures } from '../server/ifind-futures.js';
 import { runBackfill, backfillStatus, backfillConfig, calendarStart, tradingCalendar } from '../server/ifind-backfill.js';
 import { createIfindClient } from '../server/ifind-client.js';
 import { ifindConfigured } from '../server/source-config.js';
@@ -21,6 +22,15 @@ let db;
 const release = () => { db?.close(); db = null; if (fd != null) { fs.closeSync(fd); fd = null; fs.unlinkSync(lock); } };
 // 补历史可随时 Ctrl+C：第一次等当前请求写完再停，第二次立即退出
 let interrupted = false;
+/** 期货 / 外汇日线：失败只记退出码，不影响后面的行情同步 */
+async function futures(db, client) {
+  try {
+    if ((await syncFutures({ db, client })).failed) process.exitCode = 1;
+  } catch (err) {
+    console.error(`[futures] 失败：${err.message}`);
+    process.exitCode = 1;
+  }
+}
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   if (interrupted) { release(); process.exit(130); }
   interrupted = true;
@@ -44,6 +54,8 @@ try {
       }
       console.log(`[backfill] 官方本周已用 ${(await client.dataVolume()).usage.toLocaleString()}`);
     } else {
+      // 期货 / 外汇日线也在补历史这轮补上（已补完时不请求），部署后不用等到盘后同步
+      await futures(db, client);
       const drain = flag('--drain');
       const result = await runBackfill({ db, client, drain, resume: flag('--resume'),
         maxSeconds: drain ? Infinity : undefined, shouldStop: () => interrupted });
@@ -62,6 +74,7 @@ try {
         process.exitCode = 1;
       }
     }
+    if (mode === 'daily' && !dryRun && !macroOnly && !flag('--boards')) await futures(db, client);
     // --macro-only：只拉宏观（EDB 额度独立，不消耗行情额度）
     if (!macroOnly && !flag('--boards')) {
       const result = await syncIfind({ db, client, dryRun, mode });

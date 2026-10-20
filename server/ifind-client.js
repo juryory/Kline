@@ -23,10 +23,11 @@ export function parseIfind(result) {
 }
 
 // 统一为库中日线「手/千元」、分钟「股/元」。特殊证券可在映射文件指定原始单位。
-export function normalizeIfind(row, kind, { volumeUnit = 'share', amountUnit = 'yuan', allowMissingAmount = false } = {}) {
+// amountUnit：yuan / thousand / tenThousand（国内期货成交额是万元）；allowMissingVolume：外汇没有成交量，记 0
+export function normalizeIfind(row, kind, { volumeUnit = 'share', amountUnit = 'yuan', allowMissingAmount = false, allowMissingVolume = false } = {}) {
   const number = (v) => v === null || v === undefined || v === '' ? NaN : Number(v);
   const prices = ['open', 'high', 'low', 'close'].map((k) => number(row[k]));
-  const volume = number(row.volume), amount = number(row.amount);
+  const volume = allowMissingVolume && (row.volume == null || row.volume === '') ? 0 : number(row.volume), amount = number(row.amount);
   if (!prices.every((v) => Number.isFinite(v) && v > 0) || !Number.isFinite(volume) || volume < 0
     || (!(allowMissingAmount && (row.amount == null || row.amount === '')) && (!Number.isFinite(amount) || amount < 0))) return null;
   const [open, high, low, close] = prices;
@@ -36,7 +37,7 @@ export function normalizeIfind(row, kind, { volumeUnit = 'share', amountUnit = '
   const ts = Date.parse(`${text.slice(0, 10)}T${text.slice(11) || '00:00:00'}+08:00`);
   if (!Number.isFinite(ts) || chinaDate(ts) !== text.slice(0, 10)) return null;
   const shares = volume * (volumeUnit === 'lot' ? 100 : 1);
-  const yuan = Number.isFinite(amount) ? amount * (amountUnit === 'thousand' ? 1000 : 1) : null;
+  const yuan = Number.isFinite(amount) ? amount * ({ thousand: 1000, tenThousand: 10000 }[amountUnit] ?? 1) : null;
   return { date: dateNumber(text.slice(0, 10)), ts, open, high, low, close,
     vol: kind === 'daily' ? shares / 100 : shares, amount: kind === 'daily' && yuan != null ? yuan / 1000 : yuan };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { init, dispose } from 'klinecharts';
-import { endIndexOf, moveView, INTRADAY_POINTS } from './view.js';
+import { endIndexOf, moveView, priceDigits, INTRADAY_POINTS } from './view.js';
 import { COLORS as C, timelineCreate, indicatorCreate } from './indicators.js';
 import { drawStyles, timeToIndex, indexToTime, timeToIndexF, indexToTimeF, dragDrawable, BRUSH, BRUSH_MAX_POINTS } from './drawTools.js';
 
@@ -147,7 +147,7 @@ export default function KChart({
         },
       },
     });
-    chart.setPriceVolumePrecision(data.symbol?.type === 'etf' ? 3 : 2, 0);
+    chart.setPriceVolumePrecision(priceDigits(data.symbol), 0);
     chart.applyNewData(data.bars.slice(0, endIdx + 1));
 
     const w = chart.getSize(CANDLE, 'main')?.width;

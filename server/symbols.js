@@ -36,7 +36,7 @@ function withSearchKeys(s) {
   const lower = (arr) => arr.join('').toLowerCase().replace(/\s+/g, '');
   return {
     ...s,
-    _digits: s.code.split('.')[0],
+    _digits: s.code.split('.')[0].toLowerCase(), // 期货 / 外汇代码有字母（AUZL、DINI）
     _name: s.name.toLowerCase(),
     _full: lower(pinyin(s.name, opt)),
     _initials: lower(pinyin(s.name, { ...opt, pattern: 'first' })),

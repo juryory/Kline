@@ -55,12 +55,15 @@ export function moveView(bars, view, { zoom = 1, shift = 0, toLatest = false, to
   return { bars: count, end: end >= n - 1 ? null : bars[end].timestamp };
 }
 
+/** 价格小数位：ETF 3 位，外汇 4 位（美元兑离岸人民币），其他 2 位 */
+export const priceDigits = (symbol) => symbol?.type === 'etf' ? 3 : symbol?.type === 'fx' ? 4 : 2;
+
 /** 页头行情：当日最新价与涨跌幅（相对昨收），周K/月K 下也是当日涨跌 */
 export function quoteOf(data) {
   const { close, prevClose } = data.quote;
   const pct = ((close - prevClose) / prevClose) * 100;
   return {
-    close: close.toFixed(data.symbol?.type === 'etf' ? 3 : 2),
+    close: close.toFixed(priceDigits(data.symbol)),
     pct: (pct > 0 ? '+' : '') + pct.toFixed(2) + '%',
     trend: pct > 0 ? 'up' : pct < 0 ? 'down' : '',
   };

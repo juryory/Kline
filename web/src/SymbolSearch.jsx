@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 const CATEGORY_LABEL = {
   THN: '同花顺概念', THI: '同花顺行业', THR: '同花顺地域', THS: '同花顺特色',
   THST: '同花顺风格', THTH: '同花顺主题', THBB: '同花顺宽基',
+  FUT_CN: '国内期货', FUT_GL: '海外期货', FX: '外汇',
 };
 
 /**
