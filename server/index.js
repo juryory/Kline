@@ -23,9 +23,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import adapter, { adapterName } from './adapters/index.js';
+import adapter, { adapterName, switchAdapter, sourceInfo } from './adapters/index.js';
 import { findSymbol, defaultSymbol, loadUniverse, search, publicSymbol } from './symbols.js';
-import { getDaily, getIntraday, getMinutes, aggregate } from './market.js';
+import { getDaily, getIntraday, getMinutes, aggregate, clearMarketCache } from './market.js';
 import { periodsFor, findPeriod } from '../shared/periods.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows, clearRankingCache } from './rank.js';
@@ -43,20 +43,20 @@ const HOST = process.env.HOST || '0.0.0.0';
 const REFRESH_MS = +(process.env.REFRESH_MS || 5 * 60_000);
 const INTRADAY_REFRESH_MS = +(process.env.INTRADAY_REFRESH_MS || 30_000);
 // T = 分时、m5～m60 = 分钟 K：数据源实现了 getIntraday / getMinutes 才开放（见 shared/periods.js）
-const HAS_INTRADAY = typeof adapter.getIntraday === 'function';
-const HAS_MINUTES = typeof adapter.getMinutes === 'function';
-const CAPS = { intraday: HAS_INTRADAY, minutes: HAS_MINUTES };
-const PERIODS = periodsFor(CAPS).map((p) => p.key);
+let HAS_INTRADAY = typeof adapter.getIntraday === 'function';
+let HAS_MINUTES = typeof adapter.getMinutes === 'function';
+let CAPS = { intraday: HAS_INTRADAY, minutes: HAS_MINUTES, indexOnly: adapterName === 'ifind' };
+let PERIODS = periodsFor(CAPS).map((p) => p.key);
 /** 某个标的可用的周期：板块没有分钟数据，不开放分时 / 分钟 K */
 const periodOk = (period, symbol) => periodsFor(CAPS, symbol).some((p) => p.key === period);
 // 可选指标，与 web/src/indicators.js 一致；null = 不显示
 const MAIN_INDICATORS = ['MA', 'EMA', 'BOLL', 'SAR'];
 const SUB_INDICATORS = ['VOL', 'AMT', 'MACD', 'KDJ', 'RSI'];
 // 板块排名：数据源实现了 getRanking 才开放（本地库）
-const HAS_RANK = typeof adapter.getRanking === 'function';
-const HAS_MACRO = typeof adapter.getMacro === 'function';
+let HAS_RANK = typeof adapter.getRanking === 'function';
+let HAS_MACRO = typeof adapter.getMacro === 'function';
 // 直播画面内容（= 导播台当前页）。以后加页面在这里加一项，值 = 当前数据源是否支持
-const SCENES = { kline: true, rank: HAS_RANK, macro: HAS_MACRO };
+let SCENES = { kline: true, rank: HAS_RANK, macro: HAS_MACRO };
 const DEFAULT_RANK = { list: 'THN', sort: 'pct', desc: true, top: 10 };
 // 视图：显示 bars 根 K 线，最右一根的时间戳为 end（null = 跟随最新）
 const MIN_BARS = 40; // 与 web/src/view.js 一致
@@ -190,13 +190,17 @@ let loadSeq = 0;
 async function buildData(symbol, period, { force = false } = {}) {
   // quote = 页头的当日行情（最新价 + 昨收），不随周K/月K 变成周/月涨跌
   let bars, prevClose, quote;
+  const dataLabel = adapter.label;
   const kind = findPeriod(period)?.kind;
   if (kind === 'minute') {
     // 分钟 K：页头仍显示当日涨跌（取日线）
     const [minutes, daily] = await Promise.all([getMinutes(symbol, findPeriod(period).freq, { force }), getDaily(symbol)]);
     bars = minutes;
     const last = daily.at(-1);
-    quote = { close: minutes.at(-1).close, prevClose: daily.at(-2)?.close ?? last.open, date: minutes.at(-1).timestamp };
+    const latestMinute = minutes.at(-1).timestamp;
+    const dayStart = Math.floor((latestMinute + 8*3600_000)/86400_000)*86400_000 - 8*3600_000;
+    const previous = daily.findLast(b => b.timestamp < dayStart);
+    quote = { close: minutes.at(-1).close, prevClose: previous?.close ?? last.open, date: latestMinute };
   } else if (period === 'T') {
     ({ bars, prevClose } = await getIntraday(symbol, { force }));
     quote = { close: bars.at(-1).close, prevClose, date: bars.at(-1).timestamp };
@@ -210,7 +214,8 @@ async function buildData(symbol, period, { force = false } = {}) {
     type: 'data',
     symbol: publicSymbol(symbol), // 带 type，直播画面据此判断是否为个股（自动隐藏）
     period,
-    source: adapter.label,
+    source: dataLabel,
+    provenance: [...new Set(bars.map((b) => b.dataSource).filter(Boolean))],
     bars,
     quote,
     ...(prevClose != null && { prevClose }),
@@ -250,9 +255,11 @@ let currentRank = null; // 最近一次推送的 rank 消息，新连接直接�
 
 async function loadRank() {
   if (!HAS_RANK || state.scene !== 'rank') return;
+  const source = adapterName;
   const { list, sort, desc, top } = state.rank;
   try {
     const r = await adapter.getRanking(list);
+    if (source !== adapterName) return;
     const rows = sortRows(r.rows, sort, desc).slice(0, top);
     const msg = { type: 'rank', list, listName: r.listName, date: r.date, sort, desc, top, rows };
     if (JSON.stringify(msg) !== JSON.stringify(currentRank)) {
@@ -333,7 +340,7 @@ function statusMsg() {
   for (const ws of wss.clients) clients[ws.role] = (clients[ws.role] || 0) + 1;
   return {
     type: 'status', error: lastError, clients, updatedAt: current?.updatedAt ?? null,
-    source: adapterName, intraday: HAS_INTRADAY, minutes: HAS_MINUTES, rank: HAS_RANK, macro: HAS_MACRO,
+    source: adapterName, indexOnly: adapterName === 'ifind', intraday: HAS_INTRADAY, minutes: HAS_MINUTES, rank: HAS_RANK, macro: HAS_MACRO,
     syncing: isSyncing(), syncedAt: lastSyncAt(),
   };
 }
@@ -428,6 +435,48 @@ function handleLogin(req, res, url) {
   res.end();
 }
 
+let changingSource = false;
+async function changeSource(req, res) {
+  if (changingSource || isSyncing() || prewarming) return sendJson(res, { error: '同步或切换正在进行，请完成后再切换' }, 409);
+  changingSource = true;
+  try {
+    let raw = '';
+    for await (const chunk of req) {
+      raw += chunk;
+      if (raw.length > 4096) throw new Error('请求过大');
+    }
+    const { source } = JSON.parse(raw);
+    if (!['local', 'ifind'].includes(source)) throw new Error('数据源只能为 local 或 ifind');
+    if (isSyncing() || prewarming) throw new Error('同步已开始，请完成后再切换');
+    switchAdapter(source);
+    ++loadSeq;
+    current = null;
+    currentRank = null;
+    lastError = null;
+    clearMarketCache(); clearRankingCache();
+    HAS_INTRADAY = typeof adapter.getIntraday === 'function';
+    HAS_MINUTES = typeof adapter.getMinutes === 'function';
+    CAPS = { intraday: HAS_INTRADAY, minutes: HAS_MINUTES, indexOnly: source === 'ifind' };
+    PERIODS = periodsFor(CAPS).map((p) => p.key);
+    HAS_RANK = typeof adapter.getRanking === 'function';
+    HAS_MACRO = typeof adapter.getMacro === 'function';
+    SCENES = { kline: true, rank: HAS_RANK, macro: HAS_MACRO };
+    await loadUniverse(adapter);
+    if (!findSymbol(state.symbol)) state.symbol = defaultSymbol();
+    state.watchlist = cleanWatchlist(state.watchlist);
+    if (!periodOk(state.period, findSymbol(state.symbol))) state.period = 'D';
+    if (!SCENES[state.scene]) state.scene = 'kline';
+    saveState();
+    broadcast({ type: 'sourceChanged', source });
+    broadcast({ type: 'state', state });
+    broadcastStatus();
+    await loadData({ force: true });
+    await loadRank();
+    sendJson(res, { ok: true, ...sourceInfo() });
+  } catch (err) { sendJson(res, { error: err.message }, 400); }
+  finally { changingSource = false; }
+}
+
 function handleHttp(req, res) {
   const url = new URL(req.url, 'http://x');
 
@@ -439,7 +488,7 @@ function handleHttp(req, res) {
     if (req.method !== 'GET' && !originAllowed(req)) return sendJson(res, { error: '请求来源不允许' }, 403);
     if (url.pathname === '/api/login') return handleLogin(req, res, url);
     const auth = authenticate(req, url);
-    const need = url.pathname === '/api/sync' && req.method === 'POST' ? 'admin' : API_NEED[url.pathname] ?? 'control';
+    const need = ['/api/sync', '/api/data-source'].includes(url.pathname) && req.method === 'POST' ? 'admin' : API_NEED[url.pathname] ?? 'control';
     if (!hasRole(auth.role, need)) {
       return auth.role
         ? sendJson(res, { error: need === 'admin' ? '需要管理员权限' : '没有权限' }, 403)
@@ -485,8 +534,15 @@ function handleHttp(req, res) {
     refreshAll();
     return sendJson(res, { ok: true });
   }
+  if (url.pathname === '/api/data-source') {
+    if (req.method === 'GET') return sendJson(res, { ...sourceInfo(), syncing: isSyncing() });
+    if (req.method !== 'POST') return sendJson(res, { error: '方法不允许' }, 405);
+    changeSource(req, res);
+    return;
+  }
   if (url.pathname === '/api/sync') {
     if (req.method === 'POST') {
+      if (changingSource) return sendJson(res, { error: '数据源正在切换' }, 409);
       const started = startSync('manual');
       return sendJson(res, { ok: started, ...(!started && { error: '同步正在进行中' }), ...syncInfo() });
     }

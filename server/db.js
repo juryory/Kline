@@ -10,7 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DB_PATH = path.resolve(ROOT, process.env.DB_PATH || 'data/market.db');
 
-const SCHEMA = `
+export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS symbols (
     code TEXT PRIMARY KEY,
     name TEXT NOT NULL,

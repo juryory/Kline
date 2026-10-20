@@ -16,13 +16,26 @@
 import * as mock from './mock.js';
 import * as tushare from './tushare.js';
 import * as local from './local.js';
+import * as ifind from './ifind.js';
+import { readSource, saveSource, ifindConfigured } from '../source-config.js';
 
-const adapters = { mock, tushare, local };
+const adapters = { mock, tushare, local, ifind };
 
-const name = process.env.DATA_SOURCE || 'mock';
+const name = readSource();
 if (!adapters[name]) {
   throw new Error(`未知 DATA_SOURCE: ${name}（可选：${Object.keys(adapters).join(', ')}）`);
 }
 
-export const adapterName = name;
-export default adapters[name];
+export let adapterName = name;
+export const currentAdapter = () => adapters[adapterName];
+export function switchAdapter(source) {
+  saveSource(source);
+  adapterName = source;
+}
+export function sourceInfo() {
+  return { source: adapterName, ifindConfigured: ifindConfigured(),
+    options: [{ value: 'local', label: 'Tushare 本地库' }, { value: 'ifind', label: 'iFinD（历史缺口用 Tushare）' }],
+    adjustment: adapterName === 'ifind' ? '不复权' : '股票 / ETF 前复权',
+  };
+}
+export default new Proxy({}, { get: (_target, key) => currentAdapter()[key] });

@@ -1,3 +1,4 @@
+import DataSourceSection from './DataSourceSection.jsx';
 import { useEffect, useState } from 'react';
 import {
   INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, DEFAULT_SAFE_AREA, checkIndicator, checkDrawLine,
@@ -54,6 +55,7 @@ function SyncSection() {
   }, []);
 
   const arrivals = info?.arrivals ?? {};
+  const datasets = info?.datasets?.map((s) => [s.key, s.label]) ?? DATASETS;
   return (
     <section>
       <h3>数据同步</h3>
@@ -64,15 +66,25 @@ function SyncSection() {
       </p>
       <p className="note">
         今天数据到达：
-        {DATASETS.map(([k, label]) => `${label} ${arrivals[k] ? fmtHm(arrivals[k]) : '未到'}`).join(' · ')}
+        {datasets.map(([k, label]) => `${label} ${arrivals[k] ? fmtHm(arrivals[k]) : '未到'}`).join(' · ')}
       </p>
+      {info?.quota?.profile === 'trial' && <p className="note">
+        iFinD 本周本机预留/使用：{info.quota.used.toLocaleString()} / {info.quota.total.toLocaleString()} 单元格，
+        其中补历史 {info.quota.historyUsed.toLocaleString()}；保留额度 {info.quota.reserve.toLocaleString()}。
+        不包含其他终端用量，以官方账户为准。盘中分钟同步{info.intraday ? '已启用（串行运行，忙时顺延）' : '未启用'}。
+      </p>}
+      {info?.latest && <p className="note">
+        iFinD 已保存日期：{datasets.map(([key,label]) => `${label} ${fmtMd(info.latest[key])}${
+          info.coverage?.[key] ? `（${info.coverage[key][0]}/${info.coverage[key][1]}）` : ''}`).join(' · ')}。
+        最新日期不代表历史完整。
+      </p>}
       {info?.history?.length > 0 ? (
         <div className="sync-table-wrap">
           <table className="sync-table">
             <thead>
               <tr>
                 <th>同步时间</th><th>用时</th><th>结果</th>
-                {DATASETS.map(([k, label]) => <th key={k}>{label}</th>)}
+                {datasets.map(([k, label]) => <th key={k}>{label}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -81,7 +93,7 @@ function SyncSection() {
                   <td>{fmtTime(r.startedAt)}{r.trigger === 'manual' && ' 手动'}</td>
                   <td>{Math.round((r.finishedAt - r.startedAt) / 1000)}s</td>
                   <td className={r.exitCode === 0 ? '' : 'bad'}>{r.exitCode === 0 ? '成功' : '部分失败'}</td>
-                  {DATASETS.map(([k]) => (
+                  {datasets.map(([k]) => (
                     <td key={k} className={r.lagging?.includes(k) ? 'lag' : r.arrived?.includes(k) ? 'new' : ''}>
                       {fmtMd(r.after?.[k])}{r.arrived?.includes(k) && ' 新'}
                       {/* 板块只到了一部分：显示 已到 / 应有 */}
@@ -100,15 +112,15 @@ function SyncSection() {
       )}
       <p className="note">
         日期 = 同步后本地库里该数据的最新交易日；<b className="new">新</b> = 本次同步新到；
-        板块列后面的 312/420 = 只有 312 个板块到了最新日期（tushare 分批发布，后面的同步会补齐）；
-        <span className="lag">灰色</span> = 仍落后于个股（tushare 还没发布）。完整日志在服务器 data/sync-logs/。
+        板块列后面的 312/420 = 只有 312 个板块到了最新日期（数据源分批发布，后面的同步会补齐）；
+        <span className="lag">灰色</span> = 仍落后于个股（数据源还没发布）。完整日志在服务器 data/sync-logs/。
       </p>
     </section>
   );
 }
 
 /** 导播台设置：指标参数 + 直播画面尺寸 + 画线粗细 + 数据同步。保存后服务端校验、落盘并广播到所有画面 */
-export default function SettingsPanel({ settings, showSync, onSave, onClose }) {
+export default function SettingsPanel({ settings, showSync, canSwitchSource, onSave, onClose }) {
   const [draft, setDraft] = useState(() => toDraft(settings));
 
   useEffect(() => {
@@ -147,6 +159,7 @@ export default function SettingsPanel({ settings, showSync, onSave, onClose }) {
     <div className="modal-mask" onMouseDown={onClose}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>设置</h2>
+        <DataSourceSection canSwitch={canSwitchSource} />
 
         <section>
           <h3>指标参数</h3>

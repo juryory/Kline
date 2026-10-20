@@ -241,3 +241,106 @@ ETF 日线默认参与 `npm run sync` 和定时同步；不配置 `SYNC_ETF` 时
 1. 在 `server/adapters/` 新建文件，导出 `label`、`getDaily(symbol)`、`getIntraday(symbol)`，可选 `listSymbols()`（接口说明见 `server/adapters/index.js`）
 2. 在 `server/adapters/index.js` 注册
 3. `.env` 中设置 `DATA_SOURCE=<名字>`
+
+
+## Tushare / iFinD 数据源切换
+
+按步骤部署见 [iFinD 第一版上线清单](docs/ifind-rollout.md)。
+
+导播台 → 设置 → 行情数据源，管理员可切换 **Tushare 本地库** / **iFinD**。
+切换立即刷新图表、标的池和周期权限，不触发公网取数；选择保存在行情库同目录的
+`data-source.json`，重启后仍有效（优先于 `.env` 的 `DATA_SOURCE`）。同步运行期间禁止切换。
+`GET /api/data-source` 查询状态；管理员 `POST /api/data-source`，JSON 为 `{"source":"ifind"}` 或 `{"source":"local"}`。
+
+- iFinD：现有境内股票、ETF、同花顺行业/概念、申万板块和指数日线；指数、板块、ETF 拉 1 分钟分时，个股不拉分时。
+- 指数范围：项目内置指数、已有无 category 的指数，以及微盘股 `883418.TI`。另外同步少量指数日线供昨收和涨跌幅使用。
+- 非个股显示“分时”及由 1 分钟本地聚合的 5/15/30/60 分钟 K，保留 ETF 价格精度。
+- iFinD 写入独立数据库：默认 `DB_PATH` 同目录下的 `ifind.db`，可用 `IFIND_DB_PATH` 指定。
+  Docker 默认 `/data/ifind.db`，与旧库 `/data/market.db` 共用持久数据卷；两个路径不可相同。
+  旧库以 SQLite `mode=ro` 挂载，不能从 iFinD 连接写入；此前旧库中的 iFinD 独立表会一次性复制到新库，原表保留。
+- 按日期/时间戳合并：同一条优先 iFinD，缺口使用本地已有 Tushare 数据；不会因缺历史自动请求 Tushare。
+- **iFinD 模式统一不复权**，包括补入的 Tushare 原始历史，避免跨供应商复权错配。
+  Tushare 模式保持原来的股票/ETF 前复权。图表来源标签明确说明口径，API `bars[].dataSource` 标记每条实际来源。
+- 排名价格使用同样的合并日线；资金流、涨停、成分股、宏观和领先指标仍读取已有 Tushare 本地数据，本轮 iFinD 同步不更新它们。
+- 港股指数、美股指数和期货尚未启用。候选清单示例在 `config/ifind-universe.example.json`，
+  可通过 `IFIND_UNIVERSE_FILE` 保留清单，`enabled=false` 不导入。当前只接受启用境内 CN 标的。
+  海外/期货需要另行验证代码、历史权限、夏令时、夜盘归属及前端交易时段；不能套用 A 股分钟规则。
+
+### 服务器配置与运行
+
+在服务器 `.env`（Docker 使用 `.env.docker`）填写 `IFIND_REFRESH_TOKEN`。这是 iFinD 官方账号详情里的
+Refresh Token，不是先前 FFD 的 API Key。也支持临时配置 `IFIND_ACCESS_TOKEN`；同时填写时优先使用 Refresh Token。
+凭证只用于 `https://quantapi.51ifind.com/api/v1/` 的请求头，不落入前端、源码或日志。
+账号续期/升级后需重新获取对应 Refresh Token。没有凭证也可以切换查看已有历史，自动同步不会启用。
+
+```bash
+# 查看日常计划（不调用数据接口）
+npm run sync:ifind -- --dry-run
+# 按当前选择的数据源同步
+npm run sync
+# 明确同步某个来源，不改变界面选择
+npm run sync:ifind
+npm run sync:tushare
+# 单独补历史；不会改变默认日常模式
+npm run sync:ifind -- --backfill --dry-run
+npm run sync:ifind -- --backfill
+# 当天已结束分钟的增量（不开启定时也可手动使用）
+npm run sync:ifind -- --intraday
+# Docker 示例
+# docker compose exec kline npm run sync:ifind -- --dry-run
+# docker compose exec kline npm run sync:ifind
+```
+
+自动盘后任务沿用北京时间周一至周五 **18:15—21:00，每 15 分钟一次**（Docker 已设置 `TZ=Asia/Shanghai`）。
+日常模式只同步已收盘日期，18 点前截止前一日。默认滚动最近 7 个自然日，跳过已经完成的标的/日期。
+`--backfill` 默认补近半年分时；个股日线最多近三年，其余日线从 `IFIND_HISTORY_YEARS` 年前开始（默认 5）。
+补历史时，已有 Tushare 日线按标的/日期直接复用，不重新向 iFinD 下载；新日期由日常同步写入 iFinD。
+**1.5 亿额度不等于拥有全部历史年限。** 更早的旧库行情仍能读取；旧库也没有的部分，需先确认账号历史权限再提高 `IFIND_HISTORY_YEARS`。
+各类型优先处理最近日期；日线先同步供昨收使用，然后处理分钟。任务每轮默认最多 2000 次请求或 600 秒，
+先到上限后输出 `deferred=true`，保留断点供下次继续；`--dry-run` 的 `estimatedCells` 只计算本轮计划，并非整个半年总额。
+可以用 `IFIND_MINUTE_START_DATE` / `IFIND_DAILY_START_DATE` 独立指定起点；
+`IFIND_START_DATE=YYYY-MM-DD` / `IFIND_END_DATE=YYYY-MM-DD` 指定两类共同区间。
+测试时设置 `IFIND_SYMBOLS=000001.SH,510300.SH` 限定标的；正式全量运行前清空此项及临时 END_DATE。
+恢复日常同步时清空临时起止日期，避免每次盘后都遍历历史任务。
+
+日线每批至多 100 个代码/一天；分钟每批至多 20 个标的/一天，按六字段估算低于单请求 5 万单元格。
+每个标的/日期独立记断点，成功项跳过，空值和部分数据保持待补；超过 7 天的空缺每天重试一次。
+分钟必须覆盖 09:31—11:30、13:01—15:00 全部 240 个分钟结束时刻才标记完整，不只检查行数。
+目前只排除周末，尚无独立节假日/上市日期日历；节假日、上市前和停牌的空响应会保留为待补。
+休市、停牌、不支持的代码也可能返回空，日志会显示待补，不能把“请求成功”当作“数据全量完成”。
+接口失败停止该类任务，另一类继续，避免权限错误导致连续消耗；日志中的错误码可在官方错误查询核对。
+同步锁文件 `ifind-sync.lock` 防止多进程重复拉取；异常退出留下锁时，确认没有同步进程后再移除。
+
+默认 `IFIND_QUOTA_PROFILE=trial`：日线、高频共用 **1.5 亿/周**本地账本，历史任务最多 **1 亿/周**，
+保留 **2000 万**不自动使用，正常增量有至少 **3000 万**空间。北京时间周一零点开始新一周。
+每次调用原子预留，再按响应 `dataVol` 校正；网络失败保留预留量，避免漏记。正式账号总额可调整 `IFIND_WEEKLY_BUDGET`。
+账本只覆盖本项目经此同步器发出的请求，**不包含其他终端使用量，也不能自动读取官方剩余额度**。
+先前消耗的额度应从本周可用预算中扣除；同一账号不要在多台服务器独立计账后各自按 1.5 亿运行。
+设置面板会显示周账本、各类最新日期及当日覆盖数；最新日期并不表示全部历史完整。
+旧免费账号可显式使用 `IFIND_QUOTA_PROFILE=free`，恢复日线 `IFIND_DAILY_BUDGET=900000`、
+分钟 `IFIND_MINUTE_BUDGET=1400000` 的独立月预算。
+
+盘中增量默认关闭。样本通过后，在服务器设 `IFIND_INTRADAY_ENABLED=1` 并重建容器：
+北京时间周一至周五 09:32—11:32、13:02—15:02 尝试每分钟同步一次，运行中不重叠，忙时顺延。
+只请求上一根之后已经结束的分钟，盘中不把整天标记完成；盘后检查完整覆盖，缺根才重新补当天。
+这属于分钟级 HTTP 轮询，**不是逐笔实时推送**；实际延迟取决于接口发布时间和批量请求耗时。
+初期可用 `IFIND_INTRADAY_SYMBOLS` 仅更新重点指数，其他标的仍盘后更新。
+日常、盘中和手动历史补齐共用锁文件，建议历史任务在收盘同步窗口外运行。
+
+### 代码与单位核对
+
+同步复用本地 `symbols` 标的池，不会自动发现新上市股票/ETF/新板块；可定期明确执行 Tushare 同步刷新目录。
+默认沿用本地代码。同花顺板块、申万等供应商专有代码若不一致，必须核对并配置映射，
+不要只按名称模糊匹配。单位默认按 iFinD 股/元解释，再转为本项目日线手/千元、分钟股/元；
+上线前请用少量样本对照 Super Command 的代码及单位，特殊代码通过 `IFIND_CODE_MAP_FILE` 配置：
+
+```json
+{
+  "某本地代码": { "code": "官方实际代码", "volumeUnit": "share", "amountUnit": "yuan" }
+}
+```
+
+`volumeUnit` 可为 `share`（股）或 `lot`（手），`amountUnit` 为 `yuan`（元）或 `thousand`（千元）。
+凭证、标的权限和单位尚需在目标服务器上做少量真实取数验证；离线测试不会使用账号额度。
+参考：[官方 HTTP 部署说明](https://quantapi.51ifind.com/gwstatic/static/ds_web/quantapi-web/help-center/deploy.html)、
+[接口手册](https://quantapi.51ifind.com/gwstatic/static/ds_web/quantapi-web/help-center/manual.html)。

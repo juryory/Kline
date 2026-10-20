@@ -1,0 +1,5 @@
+[
+  { "code": "", "name": "恒生指数（待核对官方代码）", "type": "index", "market": "HK", "enabled": false },
+  { "code": "", "name": "标普500指数（待核对官方代码）", "type": "index", "market": "US", "enabled": false },
+  { "code": "", "name": "期货指数（待确定品种及指数口径）", "type": "index", "market": "FUTURES", "enabled": false }
+]

@@ -1,11 +1,12 @@
 // 行情缓存 + 周期聚合。缓存日线 / 分时 / 分钟 K，周 / 月 / 年线由日线现算。
-import adapter from './adapters/index.js';
+import adapter, { adapterName } from './adapters/index.js';
 
 const TTL = +(process.env.CACHE_TTL_MS || 5 * 60_000);
 const cache = new Map(); // code -> { bars, at } | { pending }
 
 export async function getDaily(symbol, { force = false } = {}) {
-  const hit = cache.get(symbol.code);
+  const key = `${adapterName}:${symbol.code}`;
+  const hit = cache.get(key);
   if (hit?.pending) return hit.pending;
   if (!force && hit && Date.now() - hit.at < TTL) return hit.bars;
 
@@ -15,17 +16,17 @@ export async function getDaily(symbol, { force = false } = {}) {
       const bars = raw.filter((b) =>
         [b.open, b.high, b.low, b.close].every(Number.isFinite) && Number.isFinite(b.timestamp));
       if (!bars.length) throw new Error(`${symbol.code} 没有返回数据`);
-      cache.set(symbol.code, { bars, at: Date.now() });
+      cache.set(key, { bars, at: Date.now() });
       return bars;
     })
     .catch((err) => {
       // 拉取失败时保留旧缓存，直播画面不受影响
-      if (hit) cache.set(symbol.code, hit);
-      else cache.delete(symbol.code);
+      if (hit) cache.set(key, hit);
+      else cache.delete(key);
       throw err;
     });
 
-  cache.set(symbol.code, { pending });
+  cache.set(key, { pending });
   return pending;
 }
 
@@ -34,11 +35,12 @@ const intradayCache = new Map(); // code -> { value, at }
 
 export async function getIntraday(symbol, { force = false } = {}) {
   if (!adapter.getIntraday) throw new Error('当前数据源不支持分时');
-  const hit = intradayCache.get(symbol.code);
+  const key = `${adapterName}:${symbol.code}`;
+  const hit = intradayCache.get(key);
   if (!force && hit && Date.now() - hit.at < INTRADAY_TTL) return hit.value;
   const value = await adapter.getIntraday(symbol);
   if (!value?.bars?.length) throw new Error(`${symbol.code} 没有分时数据`);
-  intradayCache.set(symbol.code, { value, at: Date.now() });
+  intradayCache.set(key, { value, at: Date.now() });
   return value;
 }
 
@@ -48,7 +50,7 @@ const minuteCache = new Map(); // `${code}|${freq}` -> { bars, at }
 /** 分钟 K（freq = 5 / 15 / 30 / 60），内存缓存 1 分钟；本地库那层的缓存见 server/minutes.js */
 export async function getMinutes(symbol, freq, { force = false } = {}) {
   if (!adapter.getMinutes) throw new Error('当前数据源不支持分钟 K');
-  const key = `${symbol.code}|${freq}`;
+  const key = `${adapterName}:${symbol.code}|${freq}`;
   const hit = minuteCache.get(key);
   if (!force && hit && Date.now() - hit.at < MINUTE_TTL) return hit.bars;
   const bars = (await adapter.getMinutes(symbol, freq)).filter((b) =>
@@ -87,3 +89,5 @@ export function aggregate(daily, period) {
   if (cur) out.push(cur);
   return out;
 }
+
+export function clearMarketCache() { cache.clear(); intradayCache.clear(); minuteCache.clear(); }

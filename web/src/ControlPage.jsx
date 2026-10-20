@@ -192,6 +192,12 @@ export default function ControlPage() {
     setSelectedDraw(null);
   };
 
+  useEffect(() => {
+    setLocalData(null); setLocalError(null);
+    // 数据源能力变化时，个人浏览也退回日线，避免保留不再支持的个股分时。
+    setLocal((current) => current ? { ...current, period: 'D' } : current);
+  }, [status?.source]);
+
   // 本地浏览：标的 / 周期变化时拉 K 线；服务端刷新行情（updatedAt 变化）后也重拉
   const localKey = local ? `${local.symbol}|${local.period}` : null;
   useEffect(() => {
@@ -207,7 +213,7 @@ export default function ControlPage() {
       })
       .catch((err) => !stale && setLocalError(err.message));
     return () => { stale = true; };
-  }, [localKey, status?.updatedAt]);
+  }, [localKey, status?.updatedAt, status?.source]);
   const goPage = (key) => set({ scene: key });
   // 宏观图悬停位置：高频、不落盘，服务端原样转发给直播画面
   const sendHover = useCallback((view, index) => {
@@ -377,7 +383,7 @@ export default function ControlPage() {
       {settingsOpen && state && (
         <SettingsPanel
           settings={state.settings}
-          showSync={status?.source === 'local'}
+          showSync={['local', 'ifind'].includes(status?.source)} canSwitchSource={auth?.role === 'admin'}
           onClose={() => setSettingsOpen(false)}
           onSave={(settings) => { set({ settings }); setSettingsOpen(false); }}
         />
@@ -439,7 +445,7 @@ export default function ControlPage() {
       {/* ---- 板块排名页：操作实时反映到直播画面 ---- */}
       {tab === 'rank' && state && (
         <div className="body">
-          <RankBrowser
+          <RankBrowser key={status?.source}
             active={!settingsOpen}
             rank={state.rank}
             setRank={(patch) => set({ rank: { ...state.rank, ...patch } })}

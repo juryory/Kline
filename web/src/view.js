@@ -16,7 +16,7 @@ export { PERIODS, PRIMARY_PERIODS, isMinutePeriod } from '../../shared/periods.j
  * 数据源不支持分时 / 分钟 K、或标的是板块（没有分钟数据）时去掉对应周期
  */
 export const periodsFor = (status, symbol = null) =>
-  periodsForCaps({ intraday: status?.intraday !== false, minutes: !!status?.minutes }, symbol);
+  periodsForCaps({ intraday: status?.intraday !== false, minutes: !!status?.minutes, indexOnly: status?.indexOnly }, symbol);
 
 export function stepPeriod(period, dir, list = PERIODS) {
   const i = list.findIndex((p) => p.key === period);

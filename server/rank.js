@@ -17,7 +17,9 @@ export function clearRankingCache() {
   cache.clear();
 }
 
-export function computeRanking(db, listKey) {
+export function computeRanking(db, listKey, dailyTable = 'daily') {
+  if (!['daily', 'merged_daily'].includes(dailyTable)) throw new Error('行情表无效');
+  const cacheKey = `${dailyTable}:${listKey}`;
   const list = RANK_LISTS[listKey];
   if (!list) throw new Error(`未知排名列表 ${listKey}`);
 
@@ -26,10 +28,10 @@ export function computeRanking(db, listKey) {
 
   // 注意：不要写成 daily JOIN symbols —— SQLite 会全表扫描 daily（几百万行），这里逐个板块取 MAX（走主键）
   const date = db.prepare(`
-    SELECT MAX((SELECT MAX(date) FROM daily WHERE code = s.code)) AS d FROM symbols s WHERE s.category = ?`).get(list.category).d;
+    SELECT MAX((SELECT MAX(date) FROM ${dailyTable} WHERE code = s.code)) AS d FROM symbols s WHERE s.category = ?`).get(list.category).d;
   if (!date) throw new Error(`本地库没有${list.name}行情，请先运行 npm run sync`);
 
-  const hit = cache.get(listKey);
+  const hit = cache.get(cacheKey);
   if (hit && hit.date === date && Date.now() - hit.at < CACHE_MS) return hit.value;
 
   const year = Math.floor(date / 10000);
@@ -40,7 +42,7 @@ export function computeRanking(db, listKey) {
     ?? (year - 1) * 10000 + 1101;
   // 同上，用 code IN (...) 让 SQLite 按主键 (code, date) 范围查，而不是扫整张 daily
   const rows = db.prepare(`
-    SELECT code, date, close FROM daily
+    SELECT code, date, close FROM ${dailyTable}
     WHERE code IN (SELECT code FROM symbols WHERE category = ?) AND date >= ? AND date <= ? ORDER BY code, date`).all(list.category, from, date);
   const series = new Map();
   for (const r of rows) {
@@ -50,7 +52,7 @@ export function computeRanking(db, listKey) {
 
   // 上一年最后一个收盘价（年初至今的基准），每个板块一次主键查找
   const prevYearClose = new Map(db.prepare(`
-    SELECT s.code, (SELECT close FROM daily WHERE code = s.code AND date < ? ORDER BY date DESC LIMIT 1) AS close
+    SELECT s.code, (SELECT close FROM ${dailyTable} WHERE code = s.code AND date < ? ORDER BY date DESC LIMIT 1) AS close
     FROM symbols s WHERE s.category = ?`).all(year * 10000 + 101, list.category).map((r) => [r.code, r.close]));
 
   // 涨停数：成分股里当天涨停的个数
@@ -96,7 +98,7 @@ export function computeRanking(db, listKey) {
   // 个股行情已同步到的最新交易日；板块日期落后于它，说明板块行情还没发布（同步早了）
   const marketDate = db.prepare("SELECT MAX(date) AS d FROM synced WHERE kind = 'daily'").get()?.d ?? null;
   const value = { list: listKey, listName: list.name, date, marketDate, rows: out };
-  cache.set(listKey, { date, at: Date.now(), value });
+  cache.set(cacheKey, { date, at: Date.now(), value });
   return value;
 }
 

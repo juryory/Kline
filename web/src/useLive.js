@@ -30,6 +30,7 @@ export function useLive(role) {
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'auth') { setAuth({ role: msg.role, user: msg.user, renderKey: msg.renderKey ?? null }); setAuthError(null); }
+        else if (msg.type === 'sourceChanged') { setData(null); setRank(null); window.dispatchEvent(new Event('kline-source-changed')); }
         else if (msg.type === 'state') setState(msg.state);
         else if (msg.type === 'data') setData(msg);
         else if (msg.type === 'status') setStatus(msg);

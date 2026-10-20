@@ -28,6 +28,9 @@ export const PRIMARY_PERIODS = ['T', 'D', 'W', 'M'];
 
 /** 有分钟数据的标的：个股和指数。同花顺 / 申万等板块 tushare 不提供分钟线 */
 export const hasMinuteData = (symbol) => !!symbol && (symbol.type === 'stock' || (symbol.type === 'index' && !symbol.category));
+export const isIfindDomestic = s => !!s && ['stock','index','etf'].includes(s.type)
+  && /\.(SH|SZ|BJ|TI|SI)$/i.test(s.code)
+  && (!s.category || ['ETF','THN','THI','THR','SW1'].includes(s.category));
 
 /**
  * 当前数据源 + 标的可用的周期
@@ -35,7 +38,7 @@ export const hasMinuteData = (symbol) => !!symbol && (symbol.type === 'stock' ||
  * symbol 不传时不按标的过滤
  */
 export function periodsFor(caps = {}, symbol = null) {
-  const minuteOk = symbol ? hasMinuteData(symbol) : true;
+  const minuteOk = symbol ? (caps.indexOnly ? isIfindDomestic(symbol) && symbol.type !== 'stock' : hasMinuteData(symbol)) : true;
   return PERIODS.filter((p) => {
     if (p.kind === 'intraday') return caps.intraday !== false && minuteOk;
     if (p.kind === 'minute') return !!caps.minutes && minuteOk;

@@ -18,6 +18,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DB_PATH, openDb } from './db.js';
+import { adapterName } from './adapters/index.js';
+import { ifindConfigured } from './source-config.js';
+import { openIfindDb } from './ifind-db.js';
+import { quotaStatus } from './ifind-budget.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_DIR = path.dirname(DB_PATH);
@@ -43,9 +47,22 @@ export const DATASETS = [
   { key: 'flow', label: '个股资金流', sql: 'SELECT MAX(date) AS d FROM stock_flow' },
 ];
 
+const sourceDatasets = (source = adapterName) => source === 'ifind'
+  ? [...DATASETS.filter((s) => ['stock','etf','thn','thi','sw1'].includes(s.key)), { key: 'indexMinute', label: '指数/板块/ETF分时' }]
+  : DATASETS;
+
 let db = null;
+let ifindDb = null;
 function dataDates() {
   try {
+    if (adapterName === 'ifind') {
+      ifindDb ??= openIfindDb();
+      const db = ifindDb;
+      const groups = { stock: "s.type='stock'", etf: "s.type='etf'", thn: "s.category='THN'", thi: "s.category='THI'", sw1: "s.category='SW1'" };
+      return { ...Object.fromEntries(Object.entries(groups).map(([key, where]) => [key, db.prepare(
+        `SELECT MAX((SELECT MAX(date) FROM ifind_daily WHERE code=s.code)) AS d FROM symbols s WHERE ${where}`).get()?.d ?? null])),
+        indexMinute: db.prepare("SELECT MAX(date) AS d FROM ifind_progress WHERE kind='minute' AND complete=1").get()?.d ?? null };
+    }
     if (!fs.existsSync(DB_PATH)) return {};
     db ??= openDb();
     return Object.fromEntries(DATASETS.map((s) => [s.key, db.prepare(s.sql).get()?.d ?? null]));
@@ -62,6 +79,24 @@ function dataDates() {
 const COVERAGE = { thn: 'THN', thi: 'THI', sw1: 'SW1' };
 function dataCoverage() {
   try {
+    if (adapterName === 'ifind') {
+      const latest = dataDates();
+      const db = ifindDb;
+      const groups = { stock: "s.type='stock'", etf: "s.type='etf'", thn: "s.category='THN'", thi: "s.category='THI'", sw1: "s.category='SW1'" };
+      const out = {};
+      for (const [key, where] of Object.entries(groups)) {
+        const counts = db.prepare(`SELECT COUNT(*) AS total, SUM(EXISTS(SELECT 1 FROM ifind_progress p
+          WHERE p.code=s.code AND p.kind='daily' AND p.date=? AND p.complete=1)) AS complete
+          FROM symbols s WHERE ${where}`).get(latest[key] ?? 0);
+        out[key] = [counts.complete ?? 0, counts.total];
+      }
+      const counts = db.prepare(`SELECT COUNT(*) AS total, SUM(EXISTS(SELECT 1 FROM ifind_progress p
+        WHERE p.code=s.code AND p.kind='minute' AND p.date=? AND p.complete=1)) AS complete
+        FROM (SELECT code,type,category FROM ifind_symbols UNION SELECT code,type,category FROM symbols) s
+        WHERE s.type IN ('index','etf')`).get(latest.indexMinute ?? 0);
+      out.indexMinute = [counts.complete ?? 0, counts.total];
+      return out;
+    }
     if (!db) return {};
     const latestOf = db.prepare('SELECT MAX(date) AS d FROM daily WHERE code = ?');
     const out = {};
@@ -133,7 +168,11 @@ export const lastSyncAt = () => sync.finishedAt;
 /** 当前进度（导播台设置面板 / GET /api/sync） */
 export function syncInfo() {
   const { running, ...info } = sync;
-  return { running: !!running, ...info, schedule: scheduleSummary(), history: readHistory(60), arrivals: todayArrivals() };
+  return { running: !!running, ...info, source: adapterName, schedule: scheduleSummary(),
+    ...(adapterName === 'ifind' && { quota: quotaStatus(ifindDb ??= openIfindDb()),
+      latest: dataDates(), coverage: dataCoverage(), intraday: process.env.IFIND_INTRADAY_ENABLED === '1' }),
+    history: readHistory(60).filter((r) => (r.source || 'local') === adapterName), arrivals: todayArrivals(),
+    datasets: sourceDatasets().map(({key,label}) => ({key,label})) };
 }
 
 /** 今天各数据集第一次同步到「今天」的时刻：回答「同花顺概念今天几点更新」 */
@@ -141,8 +180,9 @@ function todayArrivals() {
   const today = ymdOf(Date.now());
   const out = {};
   for (const run of readHistory(200).reverse()) {
+    if ((run.source || 'local') !== adapterName) continue;
     if (ymdOf(run.startedAt) !== today) continue;
-    for (const s of DATASETS) {
+    for (const s of sourceDatasets()) {
       // 板块只发布了一部分时不算到达，等全部到齐的那次
       if (!out[s.key] && run.after?.[s.key] === today && !partial(run.coverage?.[s.key])) out[s.key] = run.finishedAt;
     }
@@ -152,6 +192,8 @@ function todayArrivals() {
 
 export function startSync(trigger = 'manual') {
   if (sync.running) return false;
+  const source = adapterName;
+  const datasets = sourceDatasets(source);
   const startedAt = Date.now();
   const before = dataDates();
   const coverageBefore = dataCoverage();
@@ -163,8 +205,9 @@ export function startSync(trigger = 'manual') {
   logStream.write(`# ${TRIGGER_LABEL[trigger] ?? trigger}同步 ${new Date(startedAt).toLocaleString('zh-CN', { hour12: false })}\n`);
 
   const child = spawn(process.execPath,
-    ['--env-file-if-exists=.env', '--disable-warning=ExperimentalWarning', 'scripts/sync.js'],
-    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    ['--env-file-if-exists=.env', '--disable-warning=ExperimentalWarning', 'scripts/sync-selected.js'],
+    { cwd: ROOT, env: { ...process.env, SYNC_SOURCE_OVERRIDE: source,
+      IFIND_SYNC_MODE: trigger === 'intraday' ? 'intraday' : 'daily' }, stdio: ['ignore', 'pipe', 'pipe'] });
   sync.running = child;
 
   const onData = (chunk) => {
@@ -181,12 +224,12 @@ export function startSync(trigger = 'manual') {
     const after = dataDates();
     const coverage = dataCoverage();
     // 新到：最新日期变了，或者之前只到了一部分板块、这次到齐了
-    const arrived = DATASETS.filter((s) => after[s.key] && (after[s.key] !== before[s.key]
+    const arrived = datasets.filter((s) => after[s.key] && (after[s.key] !== before[s.key]
       || (partial(coverageBefore[s.key]) && !partial(coverage[s.key])))).map((s) => s.key);
     // 「还没发布」：比个股日线落后的数据集（个股日线一般 16 点前就有）
-    const lagging = DATASETS.filter((s) => s.key !== 'stock' && after.stock && after[s.key] && after[s.key] < after.stock).map((s) => s.key);
+    const lagging = datasets.filter((s) => s.key !== 'stock' && after.stock && after[s.key] && after[s.key] < after.stock).map((s) => s.key);
     const record = {
-      trigger, startedAt, finishedAt, exitCode: code, before, after, coverage, arrived, lagging,
+      source, trigger, startedAt, finishedAt, exitCode: code, before, after, coverage, arrived, lagging,
       log: path.relative(DATA_DIR, logFile),
     };
     appendHistory(record);
@@ -194,7 +237,7 @@ export function startSync(trigger = 'manual') {
     pruneLogs();
     Object.assign(sync, { running: null, finishedAt, exitCode: code });
 
-    const label = (keys) => keys.map((k) => `${DATASETS.find((s) => s.key === k).label} ${after[k]}`
+    const label = (keys) => keys.map((k) => `${datasets.find((s) => s.key === k).label} ${after[k]}`
       + (partial(coverage[k]) ? `（${coverage[k][0]}/${coverage[k][1]} 个板块）` : '')).join('、') || '无';
     console.log(`[sync] ${hm(startedAt)} ${TRIGGER_LABEL[trigger] ?? trigger}同步结束 exit=${code} 用时 ${Math.round((finishedAt - startedAt) / 1000)}s`
       + `｜新到：${label(arrived)}｜仍落后于个股：${label(lagging)}`);
@@ -234,12 +277,12 @@ function scheduleTimes() {
   return [...times].sort((a, b) => a - b);
 }
 
-const SCHEDULE_ENABLED = !!process.env.TUSHARE_TOKEN;
+const scheduleEnabled = () => adapterName === 'ifind' ? ifindConfigured() : !!process.env.TUSHARE_TOKEN;
 const TIMES = scheduleTimes();
 const DAYS = parseDays(process.env.SYNC_DAYS || '1-5');
 
 function scheduleSummary() {
-  if (!SCHEDULE_ENABLED) return '未开启（没有配置 TUSHARE_TOKEN）';
+  if (!scheduleEnabled()) return `未开启（没有配置 ${adapterName === 'ifind' ? 'IFIND_REFRESH_TOKEN / IFIND_ACCESS_TOKEN' : 'TUSHARE_TOKEN'}）`;
   if (!TIMES.length) return '未开启（SYNC_EVERY=0 且没有 SYNC_AT）';
   const every = +(process.env.SYNC_EVERY ?? 15);
   const window = (process.env.SYNC_WINDOW || '18:15-21:00').trim();
@@ -250,18 +293,34 @@ function scheduleSummary() {
 
 /** 启动定时器（index.js 调用一次） */
 export function startSchedule() {
-  if (!SCHEDULE_ENABLED || !TIMES.length) {
+  if (!TIMES.length && process.env.IFIND_INTRADAY_ENABLED !== '1') {
     console.log(`[sync] 定时同步：${scheduleSummary()}`);
     return;
   }
   console.log(`[sync] 定时同步：${scheduleSummary()}，共 ${TIMES.length} 次：${TIMES.map(fmtMinutes).join(' ')}`);
   const done = new Set(); // 已触发过的「日期 时刻」
   setInterval(() => {
+    if (!scheduleEnabled()) return;
     const now = new Date();
+    // 盘中一分钟增量，使用北京时间，午休/周末不轮询；无交易日历时节假日可能返回空数据。
+    if (adapterName === 'ifind' && process.env.IFIND_INTRADAY_ENABLED === '1' && isChinaMinuteWindow(now.getTime())) {
+      const minuteKey = `intraday-${Math.floor(now.getTime()/60_000)}`;
+      if (!done.has(minuteKey) && !isSyncing()) {
+        done.add(minuteKey);
+        startSync('intraday');
+      }
+    }
     const minute = now.getHours() * 60 + now.getMinutes();
     const key = `${now.toDateString()} ${minute}`;
     if (!TIMES.includes(minute) || !DAYS.has(now.getDay()) || done.has(key)) return;
+    if (done.size > 3000) done.clear();
     done.add(key);
     if (!startSync('schedule')) console.log(`[sync] ${fmtMinutes(minute)} 定时同步：上一次还没结束，跳过`);
   }, 20_000);
+}
+
+export function isChinaMinuteWindow(time) {
+  const d = new Date(time+8*3600_000), m = d.getUTCHours()*60+d.getUTCMinutes();
+  return d.getUTCDay() >= 1 && d.getUTCDay() <= 5
+    && (m >= 572 && m <= 692 || m >= 782 && m <= 902);
 }
