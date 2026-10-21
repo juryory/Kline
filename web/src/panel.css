@@ -22,9 +22,11 @@
   font-variant-numeric: tabular-nums;
 }
 .panel .head { display: flex; justify-content: space-between; align-items: center; }
-.panel .title { display: flex; align-items: baseline; gap: calc(10px * var(--s)); }
+.panel .title { display: flex; align-items: center; gap: calc(10px * var(--s)); }
+/* 页头统一垂直居中：logo、文字、右侧品牌和周期按中线对齐；行高 1，免得字号不同时上下留白不一样把文字挤偏 */
+.panel .title > span, .panel .brand { line-height: 1; }
 /* logo 高度来自设置（RenderPage 设置 --logo-h，按 966×320 基准）；太宽的图按比例缩进最大宽度 */
-.panel .logo { height: calc(var(--logo-h, 24) * 1px * var(--s)); max-width: calc(240px * var(--s)); object-fit: contain; align-self: center; display: block; }
+.panel .logo { height: calc(var(--logo-h, 24) * 1px * var(--s)); max-width: calc(240px * var(--s)); object-fit: contain; display: block; }
 .panel .day { color: #ffd98a; font-size: calc(12px * var(--s)); }
 .panel .head-right { display: flex; align-items: center; gap: calc(12px * var(--s)); }
 /* 字号、颜色来自设置（RenderPage 设置 --brand-size / --brand-color） */
