@@ -1,5 +1,5 @@
 /**
- * 导播台「设置」：指标参数 + 直播画面尺寸 + 画线粗细。服务端（校验、落盘）和前端（设置面板、画图）共用。
+ * 导播台「设置」：指标参数 + 直播画面尺寸 / 底色 + 副图高度 + 画线粗细。服务端（校验、落盘）和前端（设置面板、画图）共用。
  */
 
 /** 指标参数规格。list = 可增减的一组周期；fields = 固定个数的参数 */
@@ -37,7 +37,13 @@ export const BASE_SIZE = { width: 966, height: 320 };
  * 每侧最多占画面宽度的 SAFE_SIDE_MAX；底色透明度 0～100（%）
  */
 export const SAFE_SIDE_MAX = 0.3;
-export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100 };
+// color / opacity 是整个直播画面的底色：K 线面板和两侧安全区外用同一个颜色
+// borderWidth / borderColor：安全区外靠内容一侧的竖边框（px，0 = 不画），画在安全区外里面，不占内容宽度
+export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100, borderWidth: 0, borderColor: '#c8161d' };
+export const SAFE_BORDER_MAX = 20;
+/** 副图高度（px）：导播台按实际像素；直播画面按 966×320 基准，画面放大时按比例加高 */
+export const SUB_PANE_LIMITS = { control: { min: 60, max: 400 }, render: { min: 30, max: 160 } };
+export const DEFAULT_SUB_PANE = { control: 140, render: 60 };
 
 export const DEFAULT_SETTINGS = {
   indicators: {
@@ -52,6 +58,7 @@ export const DEFAULT_SETTINGS = {
   render: { ...BASE_SIZE },
   drawLine: 1.5,
   safeArea: { ...DEFAULT_SAFE_AREA },
+  subPane: { ...DEFAULT_SUB_PANE },
 };
 
 /** 安全区外宽度校验（每侧，px）：不合法返回错误描述 */
@@ -61,6 +68,13 @@ export function checkSafeSide(v, width) {
 }
 export const checkSafeOpacity = (v) => (Number.isInteger(v) && v >= 0 && v <= 100 ? null : '0~100 的整数');
 export const checkSafeColor = (v) => (/^#[0-9a-f]{6}$/i.test(v ?? '') ? null : '颜色格式 #rrggbb');
+export const checkSafeBorder = (v) => (Number.isInteger(v) && v >= 0 && v <= SAFE_BORDER_MAX ? null : `0~${SAFE_BORDER_MAX} 的整数`);
+
+/** 副图高度校验（k = control / render）：不合法返回错误描述 */
+export function checkSubPane(k, v) {
+  const { min, max } = SUB_PANE_LIMITS[k];
+  return Number.isInteger(v) && v >= min && v <= max ? null : `${min}~${max} 的整数`;
+}
 
 /** 画线粗细校验：不合法返回错误描述 */
 export function checkDrawLine(v) {
@@ -111,15 +125,26 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
   const side = Number(raw?.safeArea?.side);
   const opacity = Number(raw?.safeArea?.opacity);
   const color = raw?.safeArea?.color;
+  const borderWidth = Number(raw?.safeArea?.borderWidth);
+  const borderColor = raw?.safeArea?.borderColor;
   const safeArea = {
     side: checkSafeSide(side, render.width) ? Math.min(prevSafe.side, Math.floor(render.width * SAFE_SIDE_MAX)) : side,
     color: checkSafeColor(color) ? prevSafe.color : color.toLowerCase(),
     opacity: checkSafeOpacity(opacity) ? prevSafe.opacity : opacity,
+    // 旧版本没有边框：不画
+    borderWidth: checkSafeBorder(borderWidth) ? prevSafe.borderWidth ?? DEFAULT_SAFE_AREA.borderWidth : borderWidth,
+    borderColor: checkSafeColor(borderColor) ? prevSafe.borderColor ?? DEFAULT_SAFE_AREA.borderColor : borderColor.toLowerCase(),
   };
+  const prevSub = fallback.subPane ?? DEFAULT_SUB_PANE;
+  const subPane = Object.fromEntries(Object.keys(SUB_PANE_LIMITS).map((k) => {
+    const v = Number(raw?.subPane?.[k]);
+    return [k, checkSubPane(k, v) ? prevSub[k] : v];
+  }));
   return {
     indicators,
     render,
     safeArea,
+    subPane,
     // 旧版本的设置里没有这一项：用默认值
     drawLine: checkDrawLine(drawLine) ? fallback.drawLine ?? DEFAULT_SETTINGS.drawLine : Math.round(drawLine * 10) / 10,
   };
@@ -146,7 +171,7 @@ export function contentSize(settings) {
   return { width: settings.render.width - side * 2, height: settings.render.height };
 }
 
-/** 安全区外的底色（带透明度） */
+/** 直播画面底色（带透明度）：K 线面板和两侧安全区外共用 */
 export function safeAreaFill({ color, opacity }) {
   const n = parseInt(color.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${opacity / 100})`;

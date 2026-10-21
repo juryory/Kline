@@ -53,14 +53,16 @@ async function getMinutesImpl(symbol, freq) {
   return (await fetchMinutes(symbol, freq, retentionStart(freq))).map((r) => toBar(r));
 }
 
-async function getIntradayImpl(symbol) {
+async function getIntradayImpl(symbol, date = null) {
   const rows = await fetchMinutes(symbol, 1, retentionStart(1));
   if (!rows.length) throw new Error(`${symbol.code} 没有分时数据`);
-  const last = new Date(rows.at(-1).ts);
+  const last = date ? new Date(`${date}T00:00:00+08:00`) : new Date(rows.at(-1).ts);
   const dayStart = new Date(last.getFullYear(), last.getMonth(), last.getDate()).getTime();
+  const day = rows.filter((r) => r.ts >= dayStart && r.ts < dayStart + 86400_000);
+  if (!day.length) throw new Error(`${symbol.name} ${date} 没有分时数据`);
   const daily = await getDaily(symbol);
   const prev = daily.filter((b) => b.timestamp < dayStart).at(-1);
-  const bars = intradayBars(rows.filter((r) => r.ts >= dayStart), symbol);
+  const bars = intradayBars(day, symbol);
   return { prevClose: prev?.close ?? bars[0].open, bars };
 }
 

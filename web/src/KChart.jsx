@@ -85,13 +85,16 @@ function chartOptions(terminal, periodRef, scale) {
  * terminal：导播台模式，带十字光标、滚轮缩放、拖拽平移（通过 onViewChange 回传）
  * params：指标参数（导播台设置），scale：字号/线宽放大倍数，minBars：最少显示根数
  *
- * 画线：drawings = 当前标的的画线 [{ id, name, points: [{ t, v }], text? }]
+ * 画线：drawings = 当前标的的画线 [{ id, name, points: [{ t, v }], text?, pane?, sub? }]
  *   直播画面只显示（锁定不可编辑）；导播台可拖动端点修改（onDrawChange）、选中（onDrawSelect），
- *   drawTool = { name, text? } 时进入绘制模式，画完回调 onDrawEnd
+ *   drawTool = { name, text? } 时进入绘制模式，画完回调 onDrawEnd。主图、副图上都能画，
+ *   副图上的线（pane = 'sub'）只在副图是画线时那个指标（sub）时显示
+ * onBarDoubleClick(bar)：导播台双击（触屏双击）某根 K 线
  */
 export default function KChart({
   data, view, main, sub, params, terminal = false, subHeight = 50, scale = 1, minBars, onViewChange,
   drawings, drawTool, onDrawEnd, onDrawChange, onDrawSelect, onDrawDelete, showDelete = false, lineWidth = 1.5, readOnly = false,
+  onBarDoubleClick,
 }) {
   const elRef = useRef(null);
   const chartRef = useRef(null);
@@ -101,7 +104,7 @@ export default function KChart({
 
   // 事件处理和 ResizeObserver 里要读最新的 props
   const latest = useRef();
-  latest.current = { data, view, onViewChange, minBars, onDrawEnd, onDrawChange, onDrawSelect, onDrawDelete, showDelete, lineWidth };
+  latest.current = { data, view, sub, onViewChange, minBars, onDrawEnd, onDrawChange, onDrawSelect, onDrawDelete, showDelete, lineWidth, onBarDoubleClick };
   const styles = () => drawStyles(scale, latest.current.lineWidth);
   // 画线交互状态：鼠标在画线上 / 正在绘制时，不触发拖拽平移
   // hover：鼠标在画线上；editing：正在拖动画线端点（触屏没有 hover，靠它避免同时平移）；dragDraw：触屏拖动画线中
@@ -109,20 +112,28 @@ export default function KChart({
   // 选中画线时的删除按钮位置（触屏用，没有 Delete 键），相对图表左上角；null = 不显示
   const [delPos, setDelPos] = useState(null);
 
-  /** 删除按钮放在选中画线最右侧可见端点的右上方；拖动中、端点都不在主图内时隐藏 */
+  /** 主图 / 副图的绘图区（相对图表左上角）：top、height 来自整个窗格，width 不含 y 轴；没有这个窗格返回 null */
+  const paneBox = (paneId) => {
+    const chart = chartRef.current;
+    const root = chart?.getSize(paneId);
+    const main = chart?.getSize(paneId, 'main');
+    return root && main ? { top: root.top, height: root.height, width: main.width } : null;
+  };
+
+  /** 删除按钮放在选中画线最右侧可见端点的右上方；拖动中、端点都不在所在窗格内时隐藏 */
   const updateDelPos = () => {
     const chart = chartRef.current;
     const st = drawState.current;
     const o = st.selected && chart?.getOverlayById(st.selected);
-    const main = chart?.getSize(CANDLE, 'main');
-    if (!latest.current.showDelete || !o?.points?.length || st.editing || !main) return setDelPos(null);
+    const box = o && paneBox(o.paneId ?? CANDLE);
+    if (!latest.current.showDelete || !o?.points?.length || st.editing || !box) return setDelPos(null);
     const inside = (p) => Number.isFinite(p?.x) && Number.isFinite(p?.y)
-      && p.x >= 0 && p.x <= main.width && p.y >= 0 && p.y <= main.height;
-    const px = [chart.convertToPixel(o.points, { paneId: CANDLE, absolute: true })].flat().filter(inside);
+      && p.x >= 0 && p.x <= box.width && p.y >= box.top && p.y <= box.top + box.height;
+    const px = [chart.convertToPixel(o.points, { paneId: o.paneId ?? CANDLE, absolute: true })].flat().filter(inside);
     if (!px.length) return setDelPos(null);
     const p = px.reduce((a, b) => (b.x > a.x ? b : a));
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-    setDelPos({ id: o.id, x: clamp(p.x + 18, 18, main.width - 18), y: clamp(p.y - 24, 18, main.height - 18) });
+    setDelPos({ id: o.id, x: clamp(p.x + 18, 18, box.width - 18), y: clamp(p.y - 24, box.top + 18, box.top + box.height - 18) });
   };
 
   const render = () => {
@@ -181,6 +192,27 @@ export default function KChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminal, scale]);
 
+  // 图形类型与指标：分时 = 面积图 + 均价线 / 昨收线（纵轴以昨收对称），K 线 = 蜡烛 + 导播选的主图指标（参数来自设置）
+  const paramsKey = JSON.stringify(params ?? null);
+  const prevClose = intraday ? data.prevClose ?? null : null;
+  useEffect(() => {
+    const chart = chartRef.current;
+    chart.setStyles({ candle: { type: intraday ? 'area' : 'candle_solid' } });
+
+    chart.removeIndicator(CANDLE);
+    const mainDef = intraday ? timelineCreate(prevClose) : indicatorCreate(main, params);
+    if (mainDef) chart.createIndicator(mainDef, true, { id: CANDLE });
+
+    chart.removeIndicator(SUB);
+    const subDef = indicatorCreate(sub, params);
+    if (subDef) chart.createIndicator(subDef, false, { id: SUB, height: subHeight, dragEnabled: false, gap: { top: 0.3, bottom: 0.05 } });
+
+    render();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminal, scale, intraday, prevClose, main, sub, subHeight, paramsKey]);
+  // 注意：要放在画线同步前面。换副图指标时先重建副图窗格，副图上的画线才能放进去
+
+
   // ---------------- 画线 ----------------
   // overlay 端点用「完整数据里的下标」定位（当前只喂到视图最右一根，下标与完整数据一致）
   const overlayCallbacks = () => (terminal ? {
@@ -214,6 +246,7 @@ export default function KChart({
         ? o.points.map((p) => ({ t: indexToTimeF(bars, p.dataIndex), v: +p.value.toFixed(3) }))
         : o.points.map((p) => ({ t: indexToTime(bars, p.dataIndex), v: p.value })),
       ...(o.extendData ? { text: o.extendData } : {}),
+      ...(o.paneId === SUB && latest.current.sub ? { pane: 'sub', sub: latest.current.sub } : {}),
     };
   };
 
@@ -224,7 +257,8 @@ export default function KChart({
     if (!chart) return;
     const st = drawState.current;
     const bars = data.bars;
-    const want = drawings ?? [];
+    // 副图上的线：副图换了指标（或关掉）就不显示
+    const want = (drawings ?? []).filter((d) => d.pane !== 'sub' || (d.sub === sub && chart.getSize(SUB)));
     const wantIds = new Set(want.map((d) => d.id));
     for (const id of st.shown) {
       if (!wantIds.has(id) && id !== st.pendingId) { chart.removeOverlay(id); st.shown.delete(id); }
@@ -238,14 +272,14 @@ export default function KChart({
         chart.createOverlay({
           id: d.id, groupId: 'drawings', name: d.name, points, extendData: d.text,
           lock: !terminal || readOnly, styles: styles(), ...overlayCallbacks(),
-        });
+        }, d.pane === 'sub' ? SUB : CANDLE);
         st.shown.add(d.id);
       }
     }
     if (st.selected && !wantIds.has(st.selected)) st.selected = null; // 被删掉了（含其他导播机删除）
     updateDelPos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawingsKey, data.symbol.code, data.period, data.bars.length, terminal, scale]);
+  }, [drawingsKey, data.symbol.code, data.period, data.bars.length, terminal, scale, sub, intraday]);
 
   // 只读切换（本地浏览）：已画的线锁定 / 解锁
   useEffect(() => {
@@ -298,25 +332,6 @@ export default function KChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawTool, terminal]);
 
-  // 图形类型与指标：分时 = 面积图 + 均价线 / 昨收线（纵轴以昨收对称），K 线 = 蜡烛 + 导播选的主图指标（参数来自设置）
-  const paramsKey = JSON.stringify(params ?? null);
-  const prevClose = intraday ? data.prevClose ?? null : null;
-  useEffect(() => {
-    const chart = chartRef.current;
-    chart.setStyles({ candle: { type: intraday ? 'area' : 'candle_solid' } });
-
-    chart.removeIndicator(CANDLE);
-    const mainDef = intraday ? timelineCreate(prevClose) : indicatorCreate(main, params);
-    if (mainDef) chart.createIndicator(mainDef, true, { id: CANDLE });
-
-    chart.removeIndicator(SUB);
-    const subDef = indicatorCreate(sub, params);
-    if (subDef) chart.createIndicator(subDef, false, { id: SUB, height: subHeight, dragEnabled: false, gap: { top: 0.3, bottom: 0.05 } });
-
-    render();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminal, scale, intraday, prevClose, main, sub, subHeight, paramsKey]);
-
   useEffect(render, [data, view?.bars, view?.end]);
 
   // 导播台：滚轮 / 双指缩放，鼠标 / 单指拖拽平移（分时不响应）
@@ -342,33 +357,38 @@ export default function KChart({
       drag = { x, view: latest.current.view, space: (w - RIGHT_GAP) / latest.current.view.bars };
     };
 
-    // 拖动画线：手指 / 鼠标位置 → K 线主图上的 { dataIndex, value }，只在主图区域内生效。
+    const local = (e) => { const r = el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    const inBox = ({ x, y }, box) => !!box && x >= 0 && x <= box.width && y >= box.top && y <= box.top + box.height;
+    /** 按下的位置在主图还是副图（副图要已显示） */
+    const paneAt = (e) => [CANDLE, SUB].find((id) => inBox(local(e), paneBox(id))) ?? null;
+
+    // 拖动画线：手指 / 鼠标位置 → 所在窗格（主图或副图）上的 { dataIndex, value }，出了这个窗格不算。
     // 画笔要小数下标（点落在两根 K 线之间），其他工具吸附到整根
-    const toPoint = (e, fractional = false) => {
+    const toPoint = (e, fractional = false, paneId = CANDLE) => {
       const chart = chartRef.current;
-      const r = el.getBoundingClientRect();
-      const x = e.clientX - r.left, y = e.clientY - r.top;
-      const main = chart?.getSize(CANDLE, 'main');
-      if (!main || y < 0 || y > main.height || x < 0 || x > main.width) return null;
-      const p = chart.convertFromPixel([{ x, y }], { paneId: CANDLE, absolute: true })[0];
+      const { x, y } = local(e);
+      if (!inBox({ x, y }, paneBox(paneId))) return null;
+      const p = chart.convertFromPixel([{ x, y }], { paneId, absolute: true })[0];
       if (!Number.isFinite(p?.dataIndex) || !Number.isFinite(p?.value)) return null;
       if (!fractional) return { dataIndex: p.dataIndex, value: p.value };
-      const cx = chart.convertToPixel([{ dataIndex: p.dataIndex, value: p.value }], { paneId: CANDLE, absolute: true })[0]?.x;
+      const cx = chart.convertToPixel([{ dataIndex: p.dataIndex, value: p.value }], { paneId, absolute: true })[0]?.x;
       const off = Number.isFinite(cx) ? (x - cx) / chart.getBarSpace() : 0;
       return { dataIndex: p.dataIndex + off, value: p.value };
     };
     const thin = (pts) => pts.filter((_, i) => i % 2 === 0 || i === pts.length - 1); // 点太多时隔一个去一个
     const drawDown = (e) => {
       const dd = drawState.current.dragDraw;
-      const p = toPoint(e, dd.name === BRUSH);
+      const pane = paneAt(e);
+      const p = pane && toPoint(e, dd.name === BRUSH, pane);
       if (!p || pointers.size) return;
+      dd.pane = pane;
       dd.start = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
       dd.last = { x: e.clientX, y: e.clientY };
-      // 拖动中先锁住，避免 KLineChart 把这次触摸当成拖动端点
+      // 拖动中先锁住，避免 KLineChart 把这次按下当成拖动端点
       chartRef.current.createOverlay({
         id: dd.id, groupId: 'drawings', name: dd.name, extendData: dd.text, points: [p, p], lock: true,
         styles: styles(), ...overlayCallbacks(),
-      });
+      }, pane);
     };
     const drawMove = (e) => {
       const dd = drawState.current.dragDraw;
@@ -378,7 +398,7 @@ export default function KChart({
       if (dd.name === BRUSH) {
         // 移动超过 3px 才记一个点；超过上限时抽稀，整条线形状不变
         if (Math.hypot(e.clientX - dd.last.x, e.clientY - dd.last.y) < 3) return;
-        const p = toPoint(e, true);
+        const p = toPoint(e, true, dd.pane);
         if (!p) return;
         dd.last = { x: e.clientX, y: e.clientY };
         let next = [...points.map(({ dataIndex, value }) => ({ dataIndex, value })), p];
@@ -386,7 +406,7 @@ export default function KChart({
         chart.overrideOverlay({ id: dd.id, points: next });
         return;
       }
-      const p = toPoint(e);
+      const p = toPoint(e, false, dd.pane);
       if (p) chart.overrideOverlay({ id: dd.id, points: [points[0], p] });
     };
     const drawUp = (e) => {
@@ -413,11 +433,24 @@ export default function KChart({
       latest.current.onDrawEnd?.(drawing);
     };
 
+    // 双击（鼠标、触屏一样）：两次没有移动的短按，间隔 350ms 内、位置相近
+    let tap = null, lastTap = null;
+    const onTap = (e) => {
+      const now = performance.now();
+      if (lastTap && now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 20) {
+        lastTap = null;
+        const { data, onBarDoubleClick } = latest.current;
+        const i = Math.round(chartRef.current?.convertFromPixel([{ x: local(e).x }], { paneId: CANDLE })[0]?.dataIndex);
+        if (onBarDoubleClick && data.bars[i]) onBarDoubleClick(data.bars[i]);
+      } else lastTap = { t: now, x: e.clientX, y: e.clientY };
+    };
+
     const onDown = (e) => {
       if (drawState.current.dragDraw) { if (e.button === 0) drawDown(e); return; }
       // 绘制中、或按在画线上（拖动端点）时不平移
       if (e.button !== 0 || locked() || drawState.current.pendingId || drawState.current.hover) return;
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      tap = pointers.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() } : null;
       if (pointers.size === 1) startDrag(e.clientX);
       else if (pointers.size === 2) {
         drag = null;
@@ -441,6 +474,9 @@ export default function KChart({
     const onUp = (e) => {
       if (drawState.current.dragDraw?.start?.pointerId === e.pointerId) return drawUp(e);
       if (!pointers.delete(e.pointerId)) return;
+      if (tap?.id === e.pointerId && performance.now() - tap.t < 300
+        && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 6) onTap(e);
+      tap = null;
       pinch = null;
       // 双指松开一根后，剩下那根手指接着平移，避免画面跳动
       if (pointers.size === 1) startDrag([...pointers.values()][0].x);

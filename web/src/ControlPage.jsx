@@ -14,6 +14,8 @@ import './control.css';
 
 // 底部预览框的最大尺寸，直播画面按比例缩小放进去
 const PREVIEW_MAX = { width: 980, height: 360 };
+// 底部（直播预览 + 快捷键说明）默认收起，展开状态记在本机浏览器
+const FOOT_OPEN_KEY = 'kline.footOpen';
 
 /**
  * 顶部导航的页面。当前页即直播画面内容（服务端 state.scene，允许值见 server/index.js 的 SCENES）。
@@ -33,20 +35,23 @@ const ECHO_GUARD_MS = 1000; // 本机刚操作过，忽略服务端回传的旧�
  * 本地浏览：这些状态只改本机，不发给服务端，直播画面保持不变。
  * 画线存在服务端（直播画面显示同一标的时会上屏），本地浏览时不允许改。
  */
-const LOCAL_KEYS = ['symbol', 'period', 'view', 'main', 'sub', 'scene', 'rank', 'macro'];
+const LOCAL_KEYS = ['symbol', 'period', 'intradayDate', 'view', 'main', 'sub', 'scene', 'rank', 'macro'];
 const BLOCKED_IN_LOCAL = ['drawPut', 'drawRemove', 'drawClear'];
 
 /** 本地浏览时合并一次修改，规则与服务端 applyPatch 一致（换标的/周期回到最新，换宏观图重置缩放和图例） */
 function applyLocal(cur, p) {
   const next = { ...cur };
   for (const k of ['symbol', 'period', 'main', 'sub', 'scene', 'view']) if (p[k] !== undefined) next[k] = p[k];
+  if (p.intradayDate !== undefined) next.intradayDate = p.intradayDate;
+  else if (next.symbol !== cur.symbol || next.period !== cur.period) next.intradayDate = null;
+  if (next.period !== 'T') next.intradayDate = null;
   if (p.rank) next.rank = { ...cur.rank, ...p.rank };
   if (p.macro) {
     next.macro = p.macro.view && p.macro.view !== cur.macro.view
       ? { view: p.macro.view, zoom: null, legend: null }
       : { ...cur.macro, ...p.macro };
   }
-  if (next.symbol !== cur.symbol || next.period !== cur.period) next.view = { ...next.view, end: null };
+  if ((next.symbol !== cur.symbol || next.period !== cur.period) && p.view === undefined) next.view = { ...next.view, end: null };
   return next;
 }
 
@@ -144,7 +149,22 @@ export default function ControlPage() {
   const [view, setView] = useState(DEFAULT_VIEW);
   const [query, setQuery] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [notice, setNotice] = useState(null); // 短暂提示（如这天没有分时）
   const touch = useTouchDevice();
+  const [footOpen, setFootOpen] = useState(() => {
+    try { return localStorage.getItem(FOOT_OPEN_KEY) === '1'; } catch { return false; }
+  });
+  const toggleFoot = () => setFootOpen((v) => {
+    try { localStorage.setItem(FOOT_OPEN_KEY, v ? '0' : '1'); } catch { /* 隐私模式等，忽略 */ }
+    return !v;
+  });
+  // 双击日K 进入某天分时前的日K 视图：退回日K 时回到原来看的位置
+  const dayView = useRef(null);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // 导播台固定一屏：整页不滚动、iPad 上不回弹（只在导播台生效，渲染页另有设置）
   useEffect(() => {
@@ -199,12 +219,12 @@ export default function ControlPage() {
   }, [status?.source]);
 
   // 本地浏览：标的 / 周期变化时拉 K 线；服务端刷新行情（updatedAt 变化）后也重拉
-  const localKey = local ? `${local.symbol}|${local.period}` : null;
+  const localKey = local ? `${local.symbol}|${local.period}|${local.intradayDate ?? ''}` : null;
   useEffect(() => {
     if (!localKey) return;
-    const [symbol, period] = localKey.split('|');
+    const [symbol, period, date] = localKey.split('|');
     let stale = false;
-    fetch(`/api/kline?symbol=${encodeURIComponent(symbol)}&period=${period}`)
+    fetch(`/api/kline?symbol=${encodeURIComponent(symbol)}&period=${period}${date ? `&date=${date}` : ''}`)
       .then((r) => r.json())
       .then((msg) => {
         if (stale) return;
@@ -219,6 +239,33 @@ export default function ControlPage() {
   const sendHover = useCallback((view, index) => {
     if (!latest.current.local) send({ type: 'hover', scope: 'macro', view, index }); // 本地浏览时不同步悬停
   }, [send]);
+
+  /** 从某天的分时回到日K：带上进入前的视图（同一个标的才用） */
+  const backView = (period) => {
+    const saved = dayView.current;
+    return period === 'D' && saved && saved.symbol === latest.current.state?.symbol ? { view: saved.view } : {};
+  };
+  const backToDaily = () => set({ period: 'D', ...backView('D') });
+  // 离开分时后清掉：以后从最新分时退回日K 不会跳到很早以前的位置
+  useEffect(() => { if (state && state.period !== 'T') dayView.current = null; }, [state?.period]);
+
+  /** 双击日K：有这天的分时就切过去（直播画面同步），没有就提示。先拉一次确认有数据，避免画面切过去是空的 */
+  const openDay = async (bar) => {
+    const { data, state, periods, view } = latest.current;
+    if (!data || data.period !== 'D' || !periods.some((p) => p.key === 'T')) return;
+    const d = new Date(bar.timestamp);
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const latestDay = bar === data.bars[data.bars.length - 1];
+    try {
+      const msg = await fetch(`/api/kline?symbol=${encodeURIComponent(data.symbol.code)}&period=T${latestDay ? '' : `&date=${day}`}`).then((r) => r.json());
+      if (msg.error) return setNotice(msg.error);
+    } catch (err) {
+      return setNotice(`${day} 分时加载失败：${err.message}`);
+    }
+    if (latest.current.data !== data) return; // 期间换了标的
+    dayView.current = { symbol: state.symbol, view };
+    set({ period: 'T', intradayDate: latestDay ? null : day });
+  };
 
   // 视图：本地先改（跟手），同时发给服务端广播到直播画面
   const applyView = (next) => {
@@ -264,7 +311,7 @@ export default function ControlPage() {
         e.preventDefault(); // 也阻止回车触发当前聚焦的按钮
         if (state) {
           const next = stepPeriod(state.period, PERIOD_KEYS[e.key], periods);
-          if (next !== state.period) set({ period: next });
+          if (next !== state.period) set({ period: next, ...backView(next) });
         }
         return;
       }
@@ -290,7 +337,8 @@ export default function ControlPage() {
   const ready = !!(connected && state);
   const q = data?.quote && quoteOf(data);
   const previewScale = Math.min(1, PREVIEW_MAX.width / render.width, PREVIEW_MAX.height / render.height);
-  const loading = data && state && (data.symbol.code !== state.symbol || data.period !== state.period);
+  const loading = data && state && (data.symbol.code !== state.symbol || data.period !== state.period
+    || (data.period === 'T' && (data.date ?? null) !== (state.intradayDate ?? null)));
   const inWatch = !!state?.watchlist.some((x) => x.code === state.symbol);
   const masked = !local && data && isSymbolMasked(state, data.symbol);
   // 当前图上标的的画线（按图表数据的标的取，切换标的加载中时不串线）
@@ -301,7 +349,7 @@ export default function ControlPage() {
 
   let range = null;
   if (data && data.period === 'T') {
-    range = { text: `分时 · ${fmtDay(data.bars[0].timestamp)}`, latest: true };
+    range = { text: `分时 · ${fmtDay(data.bars[0].timestamp)}`, latest: !data.date };
   } else if (data) {
     const endIdx = endIndexOf(data.bars, view);
     const startIdx = Math.max(0, endIdx - view.bars + 1);
@@ -397,6 +445,7 @@ export default function ControlPage() {
         </div>
       )}
       {status?.error && <div className="error">行情拉取失败，画面保持上一份数据：{status.error}</div>}
+      {notice && <div className="error notice" onClick={() => setNotice(null)}>{notice}</div>}
       {local && (
         <div className="local-banner">
           本地浏览中：这里的操作只在本机生效，不会同步到直播画面
@@ -417,7 +466,13 @@ export default function ControlPage() {
               <span className={`price ${q.trend}`}>{q.close}</span>
               <span className={q.trend}>{q.pct}</span>
               {/* 行情本身的日期，不是读取时间：同步失败时导播能一眼看出数据没更新 */}
-              <span className="asof">数据截至 {fmtDay(data.bars[data.bars.length - 1].timestamp)} {WEEKDAY[new Date(data.bars[data.bars.length - 1].timestamp).getDay()]}</span>
+              {!data.date && <span className="asof">数据截至 {fmtDay(data.bars[data.bars.length - 1].timestamp)} {WEEKDAY[new Date(data.bars[data.bars.length - 1].timestamp).getDay()]}</span>}
+              {data.date && (
+                <span className="day-tag">
+                  {data.date} 分时
+                  <button title="回到日K（Backspace）" onClick={backToDaily}>返回</button>
+                </span>
+              )}
               {loading && <span className="loading">加载中…</span>}
               {masked && <span className="hidden-tag">直播画面显示为「{maskName(data.symbol.name)}」，不显示代码</span>}
             </div>
@@ -515,11 +570,12 @@ export default function ControlPage() {
 
         <main className={`chart ${drawTool ? 'drawing' : ''}`}>
           {drawTool && <div className="draw-hint">正在画「{DRAW_TOOLS.find((t) => t.key === drawTool.name)?.label}」：{drawTool.name === 'brush' ? '按住拖动自由画线，可连续画多笔 · 再点「画笔」或 Esc 退出'
-            : dragDrawable(drawTool.name) ? '按住拖动画线，松手完成' : '在图上依次点击端点 · Esc 取消'}</div>}
+            : dragDrawable(drawTool.name) ? '按住拖动画线，松手完成（主图、副图都能画）· Esc 取消' : '在图上依次点击端点 · Esc 取消'}</div>}
           {data && state && (
             <KChart
               data={data} view={view} main={state.main} sub={state.sub} params={state.settings.indicators}
-              terminal subHeight={140} minBars={minBars} onViewChange={applyView}
+              terminal subHeight={state.settings.subPane.control} minBars={minBars} onViewChange={applyView}
+              onBarDoubleClick={openDay}
               drawings={drawings} drawTool={drawTool} lineWidth={state.settings.drawLine}
               onDrawEnd={(d) => {
                 set({ drawPut: { symbol: latest.current.data.symbol.code, drawing: d } });
@@ -556,7 +612,20 @@ export default function ControlPage() {
         </aside>
       </div>
 
-      {!touch && <footer>
+      {!touch && !footOpen && (
+        <footer className="folded">
+          <button className="fold" title="展开直播预览和快捷键说明" onClick={toggleFoot}>▴ 直播预览 · 快捷键</button>
+          <span className="muted">直播画面 {render.width}×{render.height}</span>
+          {range && tab === 'kline' && !local && (
+            <span className="range">
+              {range.text}
+              <span className={range.latest ? 'tag latest' : 'tag'}>{range.latest ? '跟随最新' : '历史区间'}</span>
+            </span>
+          )}
+        </footer>
+      )}
+      {!touch && footOpen && <footer>
+        <button className="fold corner" title="收起" onClick={toggleFoot}>▾ 收起</button>
         <div className="preview" style={{ width: render.width * previewScale, height: render.height * previewScale }}>
           <iframe
             title="直播画面" src="/render?preview" width={render.width} height={render.height}
@@ -579,7 +648,8 @@ export default function ControlPage() {
             <dt>Backspace</dt><dd>更大周期：{keyPeriods(periods).map((p) => p.label).join(' → ')}（分钟 K 点周期按钮进入）</dd>
             <dt>PgUp / PgDn</dt><dd>自选里的上一个 / 下一个（当前标的需在自选里）</dd>
             <dt>Insert / Delete</dt><dd>加入 / 移出自选（选中画线时 Delete 删除画线）</dd>
-            <dt>画线</dt><dd>左侧工具栏选工具，在图上点击端点；拖动端点修改；Esc 取消</dd>
+            <dt>画线</dt><dd>左侧工具栏选工具，线段、方框等按住拖动画出（主图、副图都能画），水平线等点击端点；拖动端点修改；Esc 取消</dd>
+            <dt>双击日K</dt><dd>查看这一天的分时（有分钟数据时；直播画面同步），Backspace 返回日K</dd>
             <dt>排名页</dt><dd>↑↓ 选择，Enter / 双击 打开板块 K 线（直播画面同步切换）</dd>
             <dt>宏观页</dt><dd>← / → 切换上一张 / 下一张图表</dd>
             <dt>字母 / 数字</dt><dd>检索标的：000001、SZZS、shangzheng、上证指数</dd>

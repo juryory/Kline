@@ -85,14 +85,16 @@ async function getMinutesImpl(symbol, freq) {
   return rows.map((r) => toBar(r, k(r.ts)));
 }
 
-/** 分时：最近一个交易日的 1 分钟线（不复权），昨收取本地日线里前一个交易日的收盘价 */
-async function getIntradayImpl(symbol) {
+/** 分时：最近一个交易日（或 date = 'YYYY-MM-DD' 那天）的 1 分钟线（不复权），昨收取本地日线里前一个交易日的收盘价 */
+async function getIntradayImpl(symbol, date = null) {
   const rows = await readMinutes(getDb(), symbol, 1);
   if (!rows.length) throw new Error(`${symbol.code} 没有分时数据`);
-  const last = new Date(rows.at(-1).ts);
+  const last = date ? new Date(`${date}T00:00:00+08:00`) : new Date(rows.at(-1).ts);
   const dayStart = new Date(last.getFullYear(), last.getMonth(), last.getDate()).getTime();
   const ymd = last.getFullYear() * 10000 + (last.getMonth() + 1) * 100 + last.getDate();
-  const bars = intradayBars(rows.filter((r) => r.ts >= dayStart), symbol);
+  const day = rows.filter((r) => r.ts >= dayStart && r.ts < dayStart + 86400_000);
+  if (!day.length) throw new Error(`${symbol.name} ${date} 没有分时数据（本地分钟线只保留最近一段）`);
+  const bars = intradayBars(day, symbol);
   const prev = getDb().prepare('SELECT close FROM daily WHERE code = ? AND date < ? ORDER BY date DESC LIMIT 1').get(symbol.code, ymd);
   const prevClose = prev?.close ?? bars[0].open;
   // 大盘指数：补上领先指标 / 涨跌家数（盘后算好的，见 server/breadth.js）

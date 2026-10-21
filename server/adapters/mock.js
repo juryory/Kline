@@ -53,10 +53,13 @@ export async function getDaily(symbol, count = 750) {
  * 分时：最近一个交易日的 1 分钟数据（241 个点：9:30–11:30、13:01–15:00）
  * 用布朗桥从日线开盘价走到收盘价，保证和日线对得上
  */
-export async function getIntraday(symbol) {
+export async function getIntraday(symbol, date = null) {
   const daily = await getDaily(symbol);
-  const day = daily.at(-1);
-  const prevClose = daily.at(-2).close;
+  const start = date && Date.parse(`${date}T00:00:00+08:00`);
+  const i = date ? daily.findIndex((b) => b.timestamp >= start && b.timestamp < start + 86400_000) : daily.length - 1;
+  if (i < 1) throw new Error(`${symbol.code} ${date} 没有分时数据`);
+  const day = daily[i];
+  const prevClose = daily[i - 1].close;
   const rand = mulberry32(hash(symbol.code) ^ day.timestamp);
 
   const times = [];

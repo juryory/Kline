@@ -3,9 +3,11 @@ import { periodsFor, quoteOf, PRIMARY_PERIODS } from './view.js';
 import { contentSize, renderScale, isSymbolMasked, maskName } from '../../shared/settings.js';
 import './panel.css';
 
+export const BRAND = '围炉财经 · 数据中台';
+
 /**
  * 直播画面，尺寸来自导播台设置（默认 966×320）。
- * 页头显示当日最新价和涨跌；K 线区间、周期、指标全部跟随导播台，指标数值显示在图内左上角。
+ * 页头：品牌 logo + 标的 + 当日最新价和涨跌，右侧品牌名 + 周期；K 线区间、周期、指标全部跟随导播台，指标数值显示在图内左上角。
  * 画面比 966×320 大时，字号、间距、线宽按比例放大（--s）。
  */
 export default function BroadcastPanel({ data, state, status }) {
@@ -18,29 +20,35 @@ export default function BroadcastPanel({ data, state, status }) {
     <div className="panel" style={{ '--s': scale }}>
       <div className="head">
         <div className="title">
+          <img className="logo" src="/logo.png" alt="" />
           <span className="name">{masked ? maskName(data.symbol.name) : data.symbol.name}</span>
           {!masked && <span className="code">{data.symbol.code}</span>}
           <span className={`price ${q.trend}`}>{q.close}</span>
           <span className={`pct ${q.trend}`}>{q.pct}</span>
+          {/* 历史某天的分时：标出日期，价格和涨跌是那天的 */}
+          {data.date && <span className="day">{data.date}</span>}
         </div>
-        <div className="periods">
-          {/* 周期太多放不下：只显示常用的几个 + 当前周期 */}
-          {periodsFor(status, data.symbol).filter((p) => PRIMARY_PERIODS.includes(p.key) || p.key === data.period).map((p) => (
-            <span key={p.key} className={p.key === data.period ? 'active' : ''}>{p.label}</span>
-          ))}
+        <div className="head-right">
+          <span className="brand">{BRAND}</span>
+          <div className="periods">
+            {/* 周期太多放不下：只显示常用的几个 + 当前周期 */}
+            {periodsFor(status, data.symbol).filter((p) => PRIMARY_PERIODS.includes(p.key) || p.key === data.period).map((p) => (
+              <span key={p.key} className={p.key === data.period ? 'active' : ''}>{p.label}</span>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="chart">
         <KChart
           data={data} view={state.view} main={state.main} sub={state.sub}
-          params={state.settings.indicators} scale={scale} subHeight={Math.round(60 * scale)}
+          params={state.settings.indicators} scale={scale} subHeight={Math.round(state.settings.subPane.render * scale)}
           drawings={state.drawings?.[data.symbol.code]} lineWidth={state.settings.drawLine}
         />
       </div>
 
       <div className="foot">
-        <b>围炉财经 · 数据中台</b>
+        <b>{BRAND}</b>
       </div>
     </div>
   );

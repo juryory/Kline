@@ -59,17 +59,19 @@ export function intradayBars(rows, symbol) {
     return bar;
   });
 }
-export async function getIntraday(symbol) {
+/** date = 'YYYY-MM-DD'：历史某天的分时，只读库里已补的分钟历史（不请求接口），没有就报错 */
+export async function getIntraday(symbol, date = null) {
   if (!isIfindDomestic(symbol)) throw new Error('iFinD 模式暂只开放境内标的的分时');
   const d = getDb();
-  if (canLive(symbol)) await refreshMinutes(live(symbol));
-  const last = d.prepare(`SELECT MAX(ts) AS ts FROM
+  if (canLive(symbol) && (!date || date === chinaDate(Date.now()))) await refreshMinutes(live(symbol));
+  const last = date ? null : d.prepare(`SELECT MAX(ts) AS ts FROM
     (SELECT MAX(ts) AS ts FROM ifind_minute WHERE code=? UNION ALL SELECT MAX(ts) FROM minute WHERE code=? AND freq=1)`)
     .get(symbol.code, symbol.code)?.ts;
-  if (!last) throw new Error(`${symbol.code} 暂无分时数据（盘中打开时按需拉取）`);
-  const day = chinaDate(last);
+  if (!date && !last) throw new Error(`${symbol.code} 暂无分时数据（盘中打开时按需拉取）`);
+  const day = date ?? chinaDate(last);
   const start = Date.parse(`${day}T00:00:00+08:00`);
   const selected = mergedMinutes(d, symbol.code, start, start+86400_000-1);
+  if (!selected.length) throw new Error(`${symbol.name} ${day} 没有分时数据（分钟历史还没补到这天）`);
   const bars = intradayBars(selected, symbol);
   const prev = d.prepare('SELECT close FROM merged_daily WHERE code=? AND date<? ORDER BY date DESC LIMIT 1')
     .get(symbol.code, dateNumber(day));

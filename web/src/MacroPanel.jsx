@@ -1,5 +1,6 @@
 import MacroView from './macro/MacroView.jsx';
 import { contentSize, renderScale } from '../../shared/settings.js';
+import { BRAND } from './BroadcastPanel.jsx';
 import './panel.css';
 
 /**
@@ -14,7 +15,7 @@ export default function MacroPanel({ state, hover }) {
     <div className="panel macro" style={{ '--s': scale }}>
       <MacroView viewKey={view} scale={scale} zoom={zoom} legend={legend} hoverIndex={hoverIndex} />
       <div className="foot">
-        <b>围炉财经 · 数据中台</b>
+        <b>{BRAND}</b>
       </div>
     </div>
   );

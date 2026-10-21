@@ -74,11 +74,12 @@ const DEFAULT_STATE = {
   scene: 'kline',      // 直播画面内容 = 导播台当前页：kline = K 线，rank = 板块排名
   rank: DEFAULT_RANK,  // 上屏的排名：列表 / 排序列 / 降序 / 前 N 名
   macro: DEFAULT_MACRO, // 宏观数据页当前图表：{ view }，见 shared/macro.js
-  drawings: {},        // K 线画线：{ 标的代码: [{ id, name, points: [{ t 时间戳, v 价格 }], text? }] }，各周期共用
+  drawings: {},        // K 线画线：{ 标的代码: [{ id, name, points: [{ t 时间戳, v 价格 }], text?, pane?, sub? }] }，各周期共用
+  intradayDate: null,  // 分时看的是哪天（'YYYY-MM-DD'，导播台双击日K 进入）；null = 最近一个交易日
 };
 
 // 画线：可用的图形（KLineChart 内置 overlay），与 web/src/drawTools.js 一致
-const DRAW_TOOLS = ['segment', 'rayLine', 'straightLine', 'horizontalStraightLine', 'priceLine',
+const DRAW_TOOLS = ['segment', 'rayLine', 'straightLine', 'rect', 'horizontalStraightLine', 'priceLine',
   'parallelStraightLine', 'priceChannelLine', 'fibonacciLine', 'simpleAnnotation', 'brush'];
 const MAX_DRAWINGS = 50; // 每个标的
 const BRUSH_MAX_POINTS = 200; // 画笔（自由线条）的点数上限，与 web/src/drawTools.js 一致
@@ -90,8 +91,14 @@ function cleanDrawing(d) {
       .slice(0, d.name === 'brush' ? BRUSH_MAX_POINTS : 5).map((p) => ({ t: p.t, v: p.v }))
     : [];
   if (!points.length) return null;
-  return { id: d.id, name: d.name, points, ...(typeof d.text === 'string' && { text: d.text.slice(0, 40) }) };
+  // 画在副图上的线：记下当时的副图指标，换了指标就不显示（数值刻度不同）
+  const onSub = d.pane === 'sub' && SUB_INDICATORS.includes(d.sub);
+  return { id: d.id, name: d.name, points, ...(typeof d.text === 'string' && { text: d.text.slice(0, 40) }),
+    ...(onSub && { pane: 'sub', sub: d.sub }) };
 }
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const cleanDay = (v) => (typeof v === 'string' && DAY_RE.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00+08:00`)) ? v : null);
 
 function cleanDrawings(all) {
   const out = {};
@@ -163,6 +170,7 @@ function loadState() {
     s.scene = SCENES[s.scene] ? s.scene : 'kline';
     s.macro = findMacroView(s.macro?.view) ? cleanMacro(s.macro, DEFAULT_MACRO) : DEFAULT_MACRO;
     s.drawings = cleanDrawings(s.drawings);
+    s.intradayDate = s.period === 'T' ? cleanDay(s.intradayDate) : null;
     return s;
   } catch {
     return { ...DEFAULT_STATE };
@@ -189,7 +197,7 @@ let loadSeq = 0;
 
 // ---------------- 行情加载 ----------------
 /** 组装一份 data 消息（推送给直播画面，或导播台本地浏览时按需拉取） */
-async function buildData(symbol, period, { force = false } = {}) {
+async function buildData(symbol, period, { force = false, date = null } = {}) {
   // quote = 页头的当日行情（最新价 + 昨收），不随周K/月K 变成周/月涨跌
   let bars, prevClose, quote;
   const dataLabel = adapter.label;
@@ -204,7 +212,7 @@ async function buildData(symbol, period, { force = false } = {}) {
     const previous = daily.findLast(b => b.timestamp < dayStart);
     quote = { close: minutes.at(-1).close, prevClose: previous?.close ?? last.open, date: latestMinute };
   } else if (period === 'T') {
-    ({ bars, prevClose } = await getIntraday(symbol, { force }));
+    ({ bars, prevClose } = await getIntraday(symbol, { force, date }));
     quote = { close: bars.at(-1).close, prevClose, date: bars.at(-1).timestamp };
   } else {
     const daily = await getDaily(symbol, { force });
@@ -221,6 +229,7 @@ async function buildData(symbol, period, { force = false } = {}) {
     bars,
     quote,
     ...(prevClose != null && { prevClose }),
+    ...(period === 'T' && date && { date }), // 看的是历史某天的分时
     updatedAt: Date.now(),
   };
 }
@@ -229,16 +238,17 @@ async function loadData({ force = false } = {}) {
   const seq = ++loadSeq;
   const symbol = findSymbol(state.symbol);
   const period = state.period;
+  const date = period === 'T' ? state.intradayDate : null;
   if (!symbol) {
     lastError = `未知标的 ${state.symbol}`;
     return broadcastStatus();
   }
   try {
-    const msg = await buildData(symbol, period, { force });
+    const msg = await buildData(symbol, period, { force, date });
     if (seq !== loadSeq) return; // 期间导播又切了标的，丢弃旧结果
 
     const last = (list) => JSON.stringify(list.at(-1));
-    const changed = !current || current.symbol.code !== symbol.code || current.period !== period
+    const changed = !current || current.symbol.code !== symbol.code || current.period !== period || current.date !== msg.date
       || current.bars.length !== msg.bars.length || last(current.bars) !== last(msg.bars);
 
     current = msg;
@@ -305,6 +315,9 @@ function applyPatch(patch = {}) {
   }
   if (patch.symbol !== undefined && findSymbol(patch.symbol)) next.symbol = patch.symbol;
   if (patch.period !== undefined && PERIODS.includes(patch.period)) next.period = patch.period;
+  // 历史分时：只在分时周期下有效；换标的 / 周期时没指定日期就回到最近一个交易日
+  if (patch.intradayDate !== undefined) next.intradayDate = cleanDay(patch.intradayDate);
+  else if (next.symbol !== state.symbol || next.period !== state.period) next.intradayDate = null;
   if (typeof patch.visible === 'boolean') next.visible = patch.visible;
   if (patch.view !== undefined) next.view = cleanView(patch.view) ?? state.view;
   if (patch.main === null || MAIN_INDICATORS.includes(patch.main)) next.main = patch.main;
@@ -319,8 +332,10 @@ function applyPatch(patch = {}) {
 
   // 换到没有分钟数据的标的（板块）时，分时 / 分钟 K 自动退回日 K
   if (!periodOk(next.period, findSymbol(next.symbol))) next.period = 'D';
-  const needData = next.symbol !== state.symbol || next.period !== state.period;
-  if (needData) next.view = { ...next.view, end: null }; // 换标的/周期后回到最新
+  if (next.period !== 'T') next.intradayDate = null;
+  const needData = next.symbol !== state.symbol || next.period !== state.period || next.intradayDate !== state.intradayDate;
+  // 换标的/周期后回到最新；导播台从历史分时退回日K 时会带上原来的视图
+  if (needData && patch.view === undefined) next.view = { ...next.view, end: null };
   if (JSON.stringify(next) === JSON.stringify(state)) return;
 
   const needRank = next.scene === 'rank' && (state.scene !== 'rank' || JSON.stringify(next.rank) !== JSON.stringify(state.rank));
@@ -508,7 +523,9 @@ function handleHttp(req, res) {
     if (!symbol) return sendJson(res, { error: `未知标的 ${url.searchParams.get('symbol')}` });
     if (!PERIODS.includes(period)) return sendJson(res, { error: `不支持的周期 ${period}` });
     if (!periodOk(period, symbol)) return sendJson(res, { error: `${symbol.name} 没有${findPeriod(period).label}数据（板块、期货、外汇不提供分钟线）` });
-    buildData(symbol, period)
+    const date = url.searchParams.get('date');
+    if (date && (period !== 'T' || !cleanDay(date))) return sendJson(res, { error: `日期参数无效 ${date}` });
+    buildData(symbol, period, { date })
       .then((msg) => sendJson(res, msg))
       .catch((err) => sendJson(res, { error: `${symbol.code}: ${err.message}` }));
     return;
@@ -593,7 +610,7 @@ setInterval(() => {
 }, +(process.env.IFIND_LIVE_RANK_MS || 60_000));
 // 定期重新载入标的池：盘后同步新增的股票 / 同花顺概念不用重启服务就能检索到
 setInterval(() => loadUniverse(adapter), +(process.env.UNIVERSE_REFRESH_MS || 30 * 60_000));
-setInterval(() => { if (state.period === 'T') loadData({ force: true }); }, INTRADAY_REFRESH_MS);
+setInterval(() => { if (state.period === 'T' && !state.intradayDate) loadData({ force: true }); }, INTRADAY_REFRESH_MS);
 
 /**
  * 盘后同步完顺带把自选 + 当前标的的分钟 K 拉进本地库，导播切到分钟周期时不用等。

@@ -34,15 +34,17 @@ export async function getDaily(symbol, { force = false } = {}) {
 }
 
 const INTRADAY_TTL = 30_000;
-const intradayCache = new Map(); // code -> { value, at }
+const HISTORY_TTL = 10 * 60_000; // 历史某天的分时不会再变
+const intradayCache = new Map(); // `${code}|${date}` -> { value, at }
 
-export async function getIntraday(symbol, { force = false } = {}) {
+/** 分时；date = 'YYYY-MM-DD' 取历史某天（导播台双击日K 进入），不传为最近一个交易日 */
+export async function getIntraday(symbol, { force = false, date = null } = {}) {
   if (!adapter.getIntraday) throw new Error('当前数据源不支持分时');
-  const key = `${adapterName}:${symbol.code}`;
+  const key = `${adapterName}:${symbol.code}|${date ?? ''}`;
   const hit = intradayCache.get(key);
-  if (!force && hit && Date.now() - hit.at < INTRADAY_TTL) return hit.value;
-  const value = await adapter.getIntraday(symbol);
-  if (!value?.bars?.length) throw new Error(`${symbol.code} 没有分时数据`);
+  if (!force && hit && Date.now() - hit.at < (date ? HISTORY_TTL : INTRADAY_TTL)) return hit.value;
+  const value = await adapter.getIntraday(symbol, date);
+  if (!value?.bars?.length) throw new Error(`${symbol.code} ${date ?? ''} 没有分时数据`);
   intradayCache.set(key, { value, at: Date.now() });
   return value;
 }

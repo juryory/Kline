@@ -1,5 +1,6 @@
 import { RANK_COLUMNS, columnLabel, fmtDate } from './rankColumns.js';
 import { contentSize, renderScale } from '../../shared/settings.js';
+import { BRAND } from './BroadcastPanel.jsx';
 import './panel.css';
 
 /**
@@ -15,10 +16,14 @@ export default function RankPanel({ rank, state }) {
     <div className="panel rank" style={{ '--s': scale }}>
       <div className="head">
         <div className="title">
+          <img className="logo" src="/logo.png" alt="" />
           <span className="name">{title}</span>
           <span className="code">{fmtDate(rank.date)}{rank.liveAt ? ` ${rank.liveAt.slice(0, 5)}` : ''}</span>
         </div>
-        <span className="code">前 {rank.rows.length} 名</span>
+        <div className="head-right">
+          <span className="brand">{BRAND}</span>
+          <span className="code">前 {rank.rows.length} 名</span>
+        </div>
       </div>
 
       {/* 行高按「前 N 名」固定分配，板块数不足 N 时下方留空，不把行拉高 */}
@@ -42,7 +47,7 @@ export default function RankPanel({ rank, state }) {
       </div>
 
       <div className="foot">
-        <b>围炉财经 · 数据中台</b>
+        <b>{BRAND}</b>
       </div>
     </div>
   );

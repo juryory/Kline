@@ -1,14 +1,16 @@
 import { registerOverlay } from 'klinecharts';
 
 /**
- * K 线画线工具：KLineChart 内置 overlay（画笔 brush 为自定义）。key 与 server/index.js 的 DRAW_TOOLS 一致。
+ * K 线画线工具：KLineChart 内置 overlay（画笔 brush、方框 rect 为自定义）。key 与 server/index.js 的 DRAW_TOOLS 一致。
  * 画线按「时间戳 + 价格」存在服务端，各周期共用（日K 上画的线在周K / 月K 上也在对应位置）。
+ * 画在副图上的线另存 pane = 'sub' 和当时的副图指标，只在副图是同一个指标时显示（数值刻度不同）。
  */
 // more = 收在工具栏「更多」里，点开才显示
 export const DRAW_TOOLS = [
   { key: 'segment', label: '线段', icon: '╱' },
   { key: 'rayLine', label: '射线', icon: '↗' },
   { key: 'straightLine', label: '直线', icon: '⟋' },
+  { key: 'rect', label: '方框', icon: '▭' },
   { key: 'simpleAnnotation', label: '文字标注', icon: 'T' },
   { key: 'brush', label: '画笔', icon: '✎' },
   { key: 'horizontalStraightLine', label: '水平线', icon: '―', more: true },
@@ -22,6 +24,7 @@ export const DRAW_TOOLS = [
  * 画笔：按住拖动自由画线，经过的点连成折线。端点用小数下标（落在两根 K 线之间），线条才连续；
  * 存储时换成按相邻 K 线插值的时间戳，切周期后同样按比例落位。最多 BRUSH_MAX_POINTS 个点（与服务端一致）
  */
+export const DRAW_COLOR = '#ffcc4d';
 export const BRUSH = 'brush';
 export const BRUSH_MAX_POINTS = 200;
 registerOverlay({
@@ -34,12 +37,31 @@ registerOverlay({
     coordinates.length > 1 ? [{ type: 'line', attrs: { coordinates } }] : [],
 });
 
-/** 两个端点的工具：触屏上改为按住拖动画线（按下 = 起点，松手 = 终点），鼠标仍是依次点击。画笔始终是拖动 */
-export const DRAG_TOOLS = new Set(['segment', 'rayLine', 'straightLine', 'fibonacciLine']);
-export const isTouchDevice = () => matchMedia('(pointer: coarse)').matches;
-export const dragDrawable = (name) => name === 'brush' || (DRAG_TOOLS.has(name) && isTouchDevice());
+/**
+ * 方框：两个对角点，拖动画出。线宽、颜色跟画线样式走，框内淡淡填充一层
+ */
+export const RECT = 'rect';
+registerOverlay({
+  name: RECT,
+  totalStep: 3,
+  needDefaultPointFigure: true,
+  needDefaultXAxisFigure: true,
+  needDefaultYAxisFigure: true,
+  createPointFigures: ({ overlay, coordinates }) => {
+    if (coordinates.length < 2) return [];
+    const [a, b] = coordinates;
+    const line = overlay.styles?.line ?? {};
+    return [{
+      type: 'polygon',
+      attrs: { coordinates: [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }] },
+      styles: { style: 'stroke_fill', color: 'rgba(255,204,77,0.08)', borderColor: line.color ?? DRAW_COLOR, borderSize: line.size ?? 1.5 },
+    }];
+  },
+});
 
-export const DRAW_COLOR = '#ffcc4d';
+/** 两个端点的工具和画笔：按住拖动画线（按下 = 起点，松手 = 终点），鼠标和触屏一样。其余工具依次点击端点 */
+export const DRAG_TOOLS = new Set(['segment', 'rayLine', 'straightLine', 'fibonacciLine', RECT, 'brush']);
+export const dragDrawable = (name) => DRAG_TOOLS.has(name);
 
 /** 画线样式：lineWidth = 设置里的画线粗细；直播画面按 scale 放大线宽与字号 */
 export const drawStyles = (scale = 1, lineWidth = 1.5) => ({

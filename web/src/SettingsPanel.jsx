@@ -1,8 +1,8 @@
 import DataSourceSection from './DataSourceSection.jsx';
 import { useEffect, useState } from 'react';
 import {
-  INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, DEFAULT_SAFE_AREA, checkIndicator, checkDrawLine,
-  checkSafeSide, checkSafeOpacity, checkSafeColor, safeAreaFill,
+  INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, DEFAULT_SAFE_AREA, DEFAULT_SUB_PANE, checkIndicator, checkDrawLine,
+  checkSafeSide, checkSafeOpacity, checkSafeColor, checkSafeBorder, checkSubPane, safeAreaFill,
 } from '../../shared/settings.js';
 import { DRAW_COLOR } from './drawTools.js';
 
@@ -17,7 +17,9 @@ const toDraft = (s) => ({
   indicators: Object.fromEntries(Object.entries(s.indicators).map(([k, v]) => [k, v.map(String)])),
   render: { width: String(s.render.width), height: String(s.render.height) },
   drawLine: String(s.drawLine),
-  safeArea: (({ side, color, opacity }) => ({ side: String(side), color, opacity: String(opacity) }))(s.safeArea ?? DEFAULT_SAFE_AREA),
+  safeArea: (({ side, color, opacity, borderWidth, borderColor }) => ({ side: String(side), color, opacity: String(opacity),
+    borderWidth: String(borderWidth ?? DEFAULT_SAFE_AREA.borderWidth), borderColor: borderColor ?? DEFAULT_SAFE_AREA.borderColor }))(s.safeArea ?? DEFAULT_SAFE_AREA),
+  subPane: (({ control, render }) => ({ control: String(control), render: String(render) }))(s.subPane ?? DEFAULT_SUB_PANE),
 });
 const toNumbers = (arr) => arr.map((v) => (v.trim() === '' ? NaN : Number(v)));
 
@@ -170,9 +172,16 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
   const safeSideErr = wErr ? null : checkSafeSide(Number(draft.safeArea.side), Number(draft.render.width));
   const safeOpacityErr = checkSafeOpacity(Number(draft.safeArea.opacity));
   const safeColorErr = checkSafeColor(draft.safeArea.color);
-  const safeErr = safeSideErr || safeOpacityErr || safeColorErr;
+  const borderErr = checkSafeBorder(Number(draft.safeArea.borderWidth)) || checkSafeColor(draft.safeArea.borderColor);
+  const fillErr = safeOpacityErr || safeColorErr;
+  const fill = fillErr ? null : safeAreaFill({ color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) });
+  // 示意图里的边框：按比例缩小，有边框时至少 1px
+  const sampleBorder = !borderErr && Number(draft.safeArea.borderWidth) > 0
+    ? `${Math.max(1, Math.round(Number(draft.safeArea.borderWidth) / 3))}px solid ${draft.safeArea.borderColor}` : undefined;
   const setSafe = (patch) => setDraft((d) => ({ ...d, safeArea: { ...d.safeArea, ...patch } }));
-  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeErr;
+  const subErr = { control: checkSubPane('control', Number(draft.subPane.control)), render: checkSubPane('render', Number(draft.subPane.render)) };
+  const setSub = (k, v) => setDraft((d) => ({ ...d, subPane: { ...d.subPane, [k]: v } }));
+  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeSideErr || borderErr || fillErr || subErr.control || subErr.render;
 
   const save = () => {
     if (invalid) return;
@@ -180,7 +189,11 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
       indicators: Object.fromEntries(Object.entries(draft.indicators).map(([k, v]) => [k, toNumbers(v)])),
       render: { width: Number(draft.render.width), height: Number(draft.render.height) },
       drawLine: Number(draft.drawLine),
-      safeArea: { side: Number(draft.safeArea.side), color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) },
+      safeArea: {
+        side: Number(draft.safeArea.side), color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity),
+        borderWidth: Number(draft.safeArea.borderWidth), borderColor: draft.safeArea.borderColor,
+      },
+      subPane: { control: Number(draft.subPane.control), render: Number(draft.subPane.render) },
     });
   };
 
@@ -250,23 +263,46 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
             {(wErr || hErr) && <span className="param-error">宽 {wErr ?? '✓'}，高 {hErr ?? '✓'}</span>}
           </div>
           <div className="param-row">
-            <span className="param-name">安全区外</span>
+            <span className="param-name">画面底色</span>
             <div className="param-inputs">
-              <label>左右各 <input value={draft.safeArea.side} inputMode="numeric" onChange={(e) => setSafe({ side: e.target.value })} /> px</label>
-              <label>底色 <input type="color" className="color" value={safeColorErr ? '#000000' : draft.safeArea.color} onChange={(e) => setSafe({ color: e.target.value })} /></label>
+              <label>颜色 <input type="color" className="color" value={safeColorErr ? '#000000' : draft.safeArea.color} onChange={(e) => setSafe({ color: e.target.value })} /></label>
               <label>透明度 <input value={draft.safeArea.opacity} inputMode="numeric" onChange={(e) => setSafe({ opacity: e.target.value })} /> %</label>
-              {!safeErr && Number(draft.safeArea.side) > 0 && (
+              {fill && (
                 <span className="safe-sample" aria-hidden="true">
-                  <i style={{ background: safeAreaFill({ color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) }) }} />
-                  <b />
-                  <i style={{ background: safeAreaFill({ color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) }) }} />
+                  {Number(draft.safeArea.side) > 0 && <i style={{ background: fill, borderRight: sampleBorder }} />}
+                  <b style={{ background: fill }} />
+                  {Number(draft.safeArea.side) > 0 && <i style={{ background: fill, borderLeft: sampleBorder }} />}
                 </span>
               )}
             </div>
-            {safeErr && <span className="param-error">{safeSideErr ? `宽度 ${safeSideErr}` : safeOpacityErr ? `透明度 ${safeOpacityErr}` : safeColorErr}</span>}
+            {fillErr && <span className="param-error">{safeOpacityErr ? `透明度 ${safeOpacityErr}` : safeColorErr}</span>}
+          </div>
+          <div className="param-row">
+            <span className="param-name">安全区外</span>
+            <div className="param-inputs">
+              <label>左右各 <input value={draft.safeArea.side} inputMode="numeric" onChange={(e) => setSafe({ side: e.target.value })} /> px</label>
+              <label>边框 <input value={draft.safeArea.borderWidth} inputMode="numeric" onChange={(e) => setSafe({ borderWidth: e.target.value })} /> px</label>
+              <label>边框颜色 <input type="color" className="color" value={checkSafeColor(draft.safeArea.borderColor) ? '#000000' : draft.safeArea.borderColor} onChange={(e) => setSafe({ borderColor: e.target.value })} /></label>
+            </div>
+            {(safeSideErr || borderErr) && <span className="param-error">{safeSideErr ? `宽度 ${safeSideErr}` : `边框 ${borderErr}`}</span>}
           </div>
           <p className="note">改尺寸后，vMix 里浏览器源的宽高要改成一样的数值。画面比 966×320 大时，文字和线条按比例放大。</p>
-          <p className="note">安全区外：画面左右两侧直播时容易被裁掉，这部分只显示底色（透明度 0 = 完全透明），K 线和文字都放在中间。0 = 不留。</p>
+          <p className="note">画面底色：K 线、排名、宏观图的背景和两侧安全区外都用这个颜色（透明度 0 = 完全透明，vMix 里只叠加内容）。</p>
+          <p className="note">安全区外：画面左右两侧直播时容易被裁掉，这部分只显示底色，K 线和文字都放在中间。0 = 不留。
+            边框画在安全区外靠内容的一侧（0 = 不画），不占内容宽度。</p>
+        </section>
+
+        <section>
+          <h3>副图高度</h3>
+          <div className="param-row">
+            <span className="param-name">高度</span>
+            <div className="param-inputs">
+              <label>导播台 <input value={draft.subPane.control} inputMode="numeric" onChange={(e) => setSub('control', e.target.value)} /> px</label>
+              <label>直播画面 <input value={draft.subPane.render} inputMode="numeric" onChange={(e) => setSub('render', e.target.value)} /> px</label>
+            </div>
+            {(subErr.control || subErr.render) && <span className="param-error">导播台 {subErr.control ?? '✓'}，直播画面 {subErr.render ?? '✓'}</span>}
+          </div>
+          <p className="note">成交量、MACD 等副图的高度。直播画面按 966×320 计算，画面放大时按比例加高。</p>
         </section>
 
         <section>

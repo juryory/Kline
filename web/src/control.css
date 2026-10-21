@@ -135,6 +135,9 @@
 .term .rank-stale code { color: #fff; }
 .term .rank-hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
 .term .error { padding: 8px 16px; background: #3a1417; color: #ffb3b3; }
+.term .error.notice { background: #3a2e10; color: #ffd98a; cursor: pointer; }
+.term .quote .day-tag { display: inline-flex; align-items: center; gap: 8px; padding: 1px 4px 1px 8px; border-radius: 3px; background: #1d3f6e; color: #cfe2ff; font-size: 12px; }
+.term .quote .day-tag button { padding: 1px 8px; font-size: 12px; }
 
 /* ---- 检索 ---- */
 .term .search { position: relative; }
@@ -221,7 +224,13 @@
 .term .quote .hidden-tag { padding: 1px 6px; border-radius: 3px; background: #6b4a12; color: #ffd98a; font-size: 12px; }
 
 /* ---- 底部：直播预览 + 快捷键 ---- */
-.term footer { display: flex; gap: 24px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+.term footer { position: relative; display: flex; gap: 24px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+/* 收起时只留一行：展开按钮 + 画面尺寸 + 当前区间 */
+.term footer.folded { align-items: center; gap: 14px; padding: 4px 16px; color: var(--muted); font-size: 12px; }
+.term footer.folded .range { color: #cfcfd8; }
+.term footer .fold { padding: 2px 10px; font-size: 12px; color: var(--muted); }
+.term footer .fold:hover:not(:disabled) { color: #e8e8ec; }
+.term footer .fold.corner { position: absolute; top: 8px; right: 16px; }
 .term .preview {
   flex: none; border-radius: 6px; overflow: hidden;
   background: repeating-conic-gradient(#1a1a1f 0 25%, #222228 0 50%) 0 0 / 16px 16px; /* 棋盘格 = 透明 */
@@ -264,7 +273,7 @@
   background: repeating-conic-gradient(#2a2a32 0 25%, #1c1c22 0 50%) 0 0 / 8px 8px; /* 棋盘格：看得出透明 */
 }
 .term .modal .safe-sample i { width: 14px; }
-.term .modal .safe-sample b { flex: 1; background: #140709; border-top: 2px solid #c8161d; }
+.term .modal .safe-sample b { flex: 1; border-top: 2px solid #c8161d; }
 .term .modal .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .term .modal footer { display: flex; gap: 10px; margin-top: 20px; padding: 0; border: none; }
 .term .modal footer .spacer { flex: 1; }
