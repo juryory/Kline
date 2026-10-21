@@ -302,9 +302,7 @@
   display: inline-flex; width: 96px; height: 22px; margin-left: 6px; border: 1px solid #33333d; border-radius: 3px; overflow: hidden;
   background: repeating-conic-gradient(#2a2a32 0 25%, #1c1c22 0 50%) 0 0 / 8px 8px; /* 棋盘格：看得出透明 */
 }
-.term .modal .safe-sample { position: relative; }
 .term .modal .safe-sample i { width: 14px; }
-.term .modal .safe-sample s { position: absolute; left: 0; right: 0; top: 0; height: 2px; z-index: 1; }
 .term .modal .font-sample { margin-left: 6px; padding: 0 8px; border-radius: 3px; background: #140709; color: #f3e9e9; line-height: 1.4; white-space: nowrap; }
 .term .modal .font-sample.name, .term .modal .font-sample.price { font-weight: 700; }
 .term .modal .font-sample.price, .term .modal .font-sample.pct { color: #16a36a; }

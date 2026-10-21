@@ -30,9 +30,8 @@ const toDraft = (s) => ({
   indicators: Object.fromEntries(Object.entries(s.indicators).map(([k, v]) => [k, v.map(String)])),
   render: { width: String(s.render.width), height: String(s.render.height) },
   drawLine: String(s.drawLine),
-  safeArea: (({ side, color, opacity, borderWidth, borderColor, topWidth, topColor }) => ({ side: String(side), color, opacity: String(opacity),
-    borderWidth: String(borderWidth ?? DEFAULT_SAFE_AREA.borderWidth), borderColor: borderColor ?? DEFAULT_SAFE_AREA.borderColor,
-    topWidth: String(topWidth ?? DEFAULT_SAFE_AREA.topWidth), topColor: topColor ?? DEFAULT_SAFE_AREA.topColor }))(s.safeArea ?? DEFAULT_SAFE_AREA),
+  safeArea: (({ side, color, opacity, borderWidth, borderColor }) => ({ side: String(side), color, opacity: String(opacity),
+    borderWidth: String(borderWidth ?? DEFAULT_SAFE_AREA.borderWidth), borderColor: borderColor ?? DEFAULT_SAFE_AREA.borderColor }))(s.safeArea ?? DEFAULT_SAFE_AREA),
   brand: (({ size, color }) => ({ size: String(size), color }))(s.brand ?? DEFAULT_BRAND),
   headFont: Object.fromEntries(Object.keys(DEFAULT_HEAD_FONT).map((k) => [k, String(s.headFont?.[k] ?? DEFAULT_HEAD_FONT[k])])),
   logo: { height: String(s.logo?.height ?? DEFAULT_LOGO.height) },
@@ -239,7 +238,6 @@ export default function SettingsPanel({ settings, logoVersion, showSync, canSwit
   const safeOpacityErr = checkSafeOpacity(Number(draft.safeArea.opacity));
   const safeColorErr = checkSafeColor(draft.safeArea.color);
   const borderErr = checkSafeBorder(Number(draft.safeArea.borderWidth)) || checkSafeColor(draft.safeArea.borderColor);
-  const topErr = checkSafeBorder(Number(draft.safeArea.topWidth)) || checkSafeColor(draft.safeArea.topColor);
   const brandErr = checkBrandSize(Number(draft.brand.size)) || checkSafeColor(draft.brand.color);
   const fontErr = Object.fromEntries(Object.keys(DEFAULT_HEAD_FONT).map((k) => [k, checkHeadFont(Number(draft.headFont[k]))]));
   const setFont = (k, v) => setDraft((d) => ({ ...d, headFont: { ...d.headFont, [k]: v } }));
@@ -253,7 +251,7 @@ export default function SettingsPanel({ settings, logoVersion, showSync, canSwit
   const setSafe = (patch) => setDraft((d) => ({ ...d, safeArea: { ...d.safeArea, ...patch } }));
   const subErr = { control: checkSubPane('control', Number(draft.subPane.control)), render: checkSubPane('render', Number(draft.subPane.render)) };
   const setSub = (k, v) => setDraft((d) => ({ ...d, subPane: { ...d.subPane, [k]: v } }));
-  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeSideErr || borderErr || topErr || brandErr || logoErr || Object.values(fontErr).some(Boolean) || fillErr || subErr.control || subErr.render;
+  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeSideErr || borderErr || brandErr || logoErr || Object.values(fontErr).some(Boolean) || fillErr || subErr.control || subErr.render;
 
   const save = () => {
     if (invalid) return;
@@ -264,7 +262,6 @@ export default function SettingsPanel({ settings, logoVersion, showSync, canSwit
       safeArea: {
         side: Number(draft.safeArea.side), color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity),
         borderWidth: Number(draft.safeArea.borderWidth), borderColor: draft.safeArea.borderColor,
-        topWidth: Number(draft.safeArea.topWidth), topColor: draft.safeArea.topColor,
       },
       brand: { size: Number(draft.brand.size), color: draft.brand.color },
       headFont: Object.fromEntries(Object.entries(draft.headFont).map(([k, v]) => [k, Number(v)])),
@@ -275,7 +272,7 @@ export default function SettingsPanel({ settings, logoVersion, showSync, canSwit
 
   // 每个分类里有不合法的输入时，左侧菜单标红点（保存按钮不可用时能找到是哪一页）
   const tabErr = {
-    screen: !!(wErr || hErr || fillErr || safeSideErr || borderErr || topErr || brandErr || logoErr || Object.values(fontErr).some(Boolean)),
+    screen: !!(wErr || hErr || fillErr || safeSideErr || borderErr || brandErr || logoErr || Object.values(fontErr).some(Boolean)),
     chart: !!(subErr.control || subErr.render || lineErr),
     indicators: Object.values(errors).some(Boolean),
   };
@@ -332,10 +329,9 @@ export default function SettingsPanel({ settings, logoVersion, showSync, canSwit
                     <label>透明度 <input value={draft.safeArea.opacity} inputMode="numeric" onChange={(e) => setSafe({ opacity: e.target.value })} /> %</label>
                     {fill && (
                       <span className="safe-sample" aria-hidden="true">
-                        {!topErr && Number(draft.safeArea.topWidth) > 0 && <s style={{ background: draft.safeArea.topColor }} />}
-                        {Number(draft.safeArea.side) > 0 && <i style={{ background: fill, borderRight: sampleBorder }} />}
-                        <b style={{ background: fill }} />
-                        {Number(draft.safeArea.side) > 0 && <i style={{ background: fill, borderLeft: sampleBorder }} />}
+                        {Number(draft.safeArea.side) > 0 && <i style={{ background: fill }} />}
+                        <b style={{ background: fill, ...(sampleBorder && { border: sampleBorder }) }} />
+                        {Number(draft.safeArea.side) > 0 && <i style={{ background: fill }} />}
                       </span>
                     )}
                   </div>
@@ -349,23 +345,15 @@ export default function SettingsPanel({ settings, logoVersion, showSync, canSwit
                   {safeSideErr && <span className="param-error">宽度 {safeSideErr}</span>}
                 </div>
                 <div className="param-row">
-                  <span className="param-name">左右边框</span>
+                  <span className="param-name">边框</span>
                   <div className="param-inputs">
                     <label>宽度 <input value={draft.safeArea.borderWidth} inputMode="numeric" onChange={(e) => setSafe({ borderWidth: e.target.value })} /> px</label>
                     <label>颜色 {color(draft.safeArea.borderColor, (v) => setSafe({ borderColor: v }))}</label>
                   </div>
                   {borderErr && <span className="param-error">{borderErr}</span>}
                 </div>
-                <div className="param-row">
-                  <span className="param-name">上边框</span>
-                  <div className="param-inputs">
-                    <label>宽度 <input value={draft.safeArea.topWidth} inputMode="numeric" onChange={(e) => setSafe({ topWidth: e.target.value })} /> px</label>
-                    <label>颜色 {color(draft.safeArea.topColor, (v) => setSafe({ topColor: v }))}</label>
-                  </div>
-                  {topErr && <span className="param-error">{topErr}</span>}
-                </div>
                 <p className="note">画面底色：K 线、排名、宏观图的背景和两侧安全区外共用（透明度 0 = 完全透明，vMix 里只叠加内容）。</p>
-                <p className="note">安全区外：画面左右两侧直播时容易被裁掉，只铺底色，K 线和文字放在中间，0 = 不留。左右边框画在安全区外靠内容的一侧，不占内容宽度；上边框横跨整个画面最上方。边框宽度 0 = 不画。</p>
+                <p className="note">安全区外：画面左右两侧直播时容易被裁掉，只铺底色，K 线和文字放在中间，0 = 不留。边框围住放内容的区域（安全区外里面），上下左右同宽，内容往里缩，宽度 0 = 不画。</p>
               </section>
 
               <section>

@@ -19,7 +19,7 @@ test('设置：副图高度默认值、越界回退到上一次的值', () => {
   assert.deepEqual(cleanSettings({ subPane: { control: 1000, render: 20.5 } }, prev).subPane, { control: 200, render: 80 });
 });
 
-test('设置：安全区外边框，旧设置没有这一项时不画，不合法回退', () => {
+test('设置：边框（上下左右统一），旧设置没有这一项时不画，不合法回退', () => {
   const old = cleanSettings({ safeArea: { side: 40, color: '#102040', opacity: 70 } });
   assert.deepEqual([old.safeArea.borderWidth, old.safeArea.borderColor], [0, '#c8161d']);
   const set = cleanSettings({ safeArea: { ...old.safeArea, borderWidth: 3, borderColor: '#FFCC4D' } }, old);
@@ -28,16 +28,23 @@ test('设置：安全区外边框，旧设置没有这一项时不画，不合�
   assert.deepEqual([bad.safeArea.borderWidth, bad.safeArea.borderColor], [3, '#ffcc4d']);
 });
 
-test('设置：上边框、品牌文字字号和颜色，旧设置用默认值，不合法回退', () => {
-  const old = cleanSettings({ safeArea: { side: 40, color: '#102040', opacity: 70 } });
-  assert.deepEqual([old.safeArea.topWidth, old.safeArea.topColor], [0, '#c8161d']);
+test('设置：旧版本的左右边框 / 上边框合并成一个边框', () => {
+  const side = { side: 40, color: '#102040', opacity: 70 };
+  // 有左右边框：沿用左右边框
+  const both = cleanSettings({ safeArea: { ...side, borderWidth: 3, borderColor: '#FFCC4D', topWidth: 6, topColor: '#ffffff' } });
+  assert.deepEqual([both.safeArea.borderWidth, both.safeArea.borderColor], [3, '#ffcc4d']);
+  assert.equal('topWidth' in both.safeArea, false);
+  // 只有上边框：沿用上边框
+  const top = cleanSettings({ safeArea: { ...side, borderWidth: 0, borderColor: '#c8161d', topWidth: 4, topColor: '#FFFFFF' } });
+  assert.deepEqual([top.safeArea.borderWidth, top.safeArea.borderColor], [4, '#ffffff']);
+});
+
+test('设置：品牌文字字号和颜色，旧设置用默认值，不合法回退', () => {
+  const old = cleanSettings({});
   assert.deepEqual(old.brand, { size: 12, color: '#9b8a8a' });
-  const set = cleanSettings({ safeArea: { ...old.safeArea, topWidth: 4, topColor: '#FFFFFF' }, brand: { size: 18, color: '#FFCC4D' } }, old);
-  assert.deepEqual([set.safeArea.topWidth, set.safeArea.topColor], [4, '#ffffff']);
+  const set = cleanSettings({ brand: { size: 18, color: '#FFCC4D' } }, old);
   assert.deepEqual(set.brand, { size: 18, color: '#ffcc4d' });
-  const bad = cleanSettings({ safeArea: { ...set.safeArea, topWidth: 30 }, brand: { size: 4, color: 'x' } }, set);
-  assert.equal(bad.safeArea.topWidth, 4);
-  assert.deepEqual(bad.brand, { size: 18, color: '#ffcc4d' });
+  assert.deepEqual(cleanSettings({ brand: { size: 4, color: 'x' } }, set).brand, { size: 18, color: '#ffcc4d' });
 });
 
 test('设置：页头字号（名称 / 最新价 / 涨跌幅），旧设置用默认值，不合法回退', () => {

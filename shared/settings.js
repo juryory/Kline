@@ -38,9 +38,8 @@ export const BASE_SIZE = { width: 966, height: 320 };
  */
 export const SAFE_SIDE_MAX = 0.3;
 // color / opacity 是整个直播画面的底色：K 线面板和两侧安全区外用同一个颜色
-// borderWidth / borderColor：安全区外靠内容一侧的竖边框（px，0 = 不画），画在安全区外里面，不占内容宽度
-// topWidth / topColor：整个画面（K 线和安全区外）最上方的横边框（px，0 = 不画），盖在画面上，不占内容高度
-export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100, borderWidth: 0, borderColor: '#c8161d', topWidth: 0, topColor: '#c8161d' };
+// borderWidth / borderColor：边框，围住放内容的区域（安全区外里面），上下左右同宽（px，0 = 不画），内容往里缩
+export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100, borderWidth: 0, borderColor: '#c8161d' };
 export const SAFE_BORDER_MAX = 20;
 /** 页头品牌文字「围炉财经 · 数据中台」：字号按 966×320 基准（画面放大时按比例放大），颜色 */
 export const BRAND_SIZE_LIMITS = { min: 8, max: 40 };
@@ -151,10 +150,10 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
   const side = Number(raw?.safeArea?.side);
   const opacity = Number(raw?.safeArea?.opacity);
   const color = raw?.safeArea?.color;
-  const borderWidth = Number(raw?.safeArea?.borderWidth);
-  const borderColor = raw?.safeArea?.borderColor;
-  const topWidth = Number(raw?.safeArea?.topWidth);
-  const topColor = raw?.safeArea?.topColor;
+  // 旧版本左右边框和上边框分开调：合并成一个边框，没有左右边框时沿用上边框
+  const legacyTop = !(Number(raw?.safeArea?.borderWidth) > 0) && Number(raw?.safeArea?.topWidth) > 0;
+  const borderWidth = Number(legacyTop ? raw.safeArea.topWidth : raw?.safeArea?.borderWidth);
+  const borderColor = legacyTop ? raw.safeArea.topColor : raw?.safeArea?.borderColor;
   const safeArea = {
     side: checkSafeSide(side, render.width) ? Math.min(prevSafe.side, Math.floor(render.width * SAFE_SIDE_MAX)) : side,
     color: checkSafeColor(color) ? prevSafe.color : color.toLowerCase(),
@@ -162,8 +161,6 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
     // 旧版本没有边框：不画
     borderWidth: checkSafeBorder(borderWidth) ? prevSafe.borderWidth ?? DEFAULT_SAFE_AREA.borderWidth : borderWidth,
     borderColor: checkSafeColor(borderColor) ? prevSafe.borderColor ?? DEFAULT_SAFE_AREA.borderColor : borderColor.toLowerCase(),
-    topWidth: checkSafeBorder(topWidth) ? prevSafe.topWidth ?? DEFAULT_SAFE_AREA.topWidth : topWidth,
-    topColor: checkSafeColor(topColor) ? prevSafe.topColor ?? DEFAULT_SAFE_AREA.topColor : topColor.toLowerCase(),
   };
   const prevBrand = fallback.brand ?? DEFAULT_BRAND;
   const brandSize = Number(raw?.brand?.size);

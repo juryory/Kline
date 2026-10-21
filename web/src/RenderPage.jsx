@@ -29,16 +29,9 @@ export default function RenderPage({ preview }) {
   const safe = state.settings.safeArea;
   // 画面底色：K 线面板和两侧安全区外（直播时容易被裁掉，只铺底色，内容放在中间）用同一个颜色
   const fill = safeAreaFill(safe ?? DEFAULT_SAFE_AREA);
-  // 安全区外靠内容一侧的边框：画在安全区外里面（最宽不超过安全区外），不占内容宽度
-  const border = safe?.borderWidth ? `${Math.min(safe.borderWidth, safe.side)}px solid ${safe.borderColor}` : undefined;
-  const side = (edge) => safe?.side ? (
-    <div style={{ width: safe.side, height, flex: 'none', boxSizing: 'border-box', background: fill, [edge]: border }} />
-  ) : null;
-
-  // 最上方横边框：横跨 K 线和两侧安全区外，盖在画面上（不改变内容高度）
-  const top = safe?.topWidth ? (
-    <div style={{ position: 'absolute', left: 0, top: 0, width, height: safe.topWidth, background: safe.topColor, zIndex: 1 }} />
-  ) : null;
+  const side = safe?.side ? <div style={{ width: safe.side, height, flex: 'none', background: fill }} /> : null;
+  // 边框：围住放内容的区域（安全区外里面），上下左右同宽，内容往里缩、不被盖住
+  const border = safe?.borderWidth ? `${safe.borderWidth}px solid ${safe.borderColor}` : undefined;
   const { brand, headFont, logo } = state.settings;
 
   // 导播"隐藏"时渐隐；导播台预览里保留半透明
@@ -51,14 +44,13 @@ export default function RenderPage({ preview }) {
       ...(headFont && { '--font-name': headFont.name, '--font-price': headFont.price, '--font-pct': headFont.pct }),
       ...(logo && { '--logo-h': logo.height }),
     }}>
-      {top}
-      {side('borderRight')}
-      <div style={{ width: contentSize(state.settings).width, height, flex: 'none' }}>
+      {side}
+      <div style={{ width: contentSize(state.settings).width, height, flex: 'none', boxSizing: 'border-box', border }}>
         {state.scene === 'rank' ? rank && <RankPanel rank={rank} state={state} />
           : state.scene === 'macro' ? <MacroPanel state={state} hover={hover} />
             : data && <BroadcastPanel data={data} state={state} status={status} />}
       </div>
-      {side('borderLeft')}
+      {side}
     </div>
   );
 }
