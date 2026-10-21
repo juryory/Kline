@@ -48,6 +48,10 @@ export const DEFAULT_BRAND = { size: 12, color: '#9b8a8a' };
 /** 页头字号：标的名称 / 最新价 / 涨跌幅，按 966×320 基准（画面放大时按比例放大） */
 export const HEAD_FONT_LIMITS = { min: 8, max: 60 };
 export const DEFAULT_HEAD_FONT = { name: 20, price: 22, pct: 14 };
+/** 页头 logo 高度：按 966×320 基准（画面放大时按比例放大），0 = 不显示；上传的图片最大 LOGO_MAX_BYTES */
+export const LOGO_HEIGHT_LIMITS = { min: 0, max: 80 };
+export const DEFAULT_LOGO = { height: 24 };
+export const LOGO_MAX_BYTES = 512 * 1024;
 /** 副图高度（px）：导播台按实际像素；直播画面按 966×320 基准，画面放大时按比例加高 */
 export const SUB_PANE_LIMITS = { control: { min: 60, max: 400 }, render: { min: 30, max: 160 } };
 export const DEFAULT_SUB_PANE = { control: 140, render: 60 };
@@ -68,6 +72,7 @@ export const DEFAULT_SETTINGS = {
   subPane: { ...DEFAULT_SUB_PANE },
   brand: { ...DEFAULT_BRAND },
   headFont: { ...DEFAULT_HEAD_FONT },
+  logo: { ...DEFAULT_LOGO },
 };
 
 /** 安全区外宽度校验（每侧，px）：不合法返回错误描述 */
@@ -80,6 +85,10 @@ export const checkSafeColor = (v) => (/^#[0-9a-f]{6}$/i.test(v ?? '') ? null : '
 export const checkSafeBorder = (v) => (Number.isInteger(v) && v >= 0 && v <= SAFE_BORDER_MAX ? null : `0~${SAFE_BORDER_MAX} 的整数`);
 export const checkHeadFont = (v) => {
   const { min, max } = HEAD_FONT_LIMITS;
+  return Number.isInteger(v) && v >= min && v <= max ? null : `${min}~${max} 的整数`;
+};
+export const checkLogoHeight = (v) => {
+  const { min, max } = LOGO_HEIGHT_LIMITS;
   return Number.isInteger(v) && v >= min && v <= max ? null : `${min}~${max} 的整数`;
 };
 export const checkBrandSize = (v) => {
@@ -172,6 +181,8 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
     const v = Number(raw?.headFont?.[k]);
     return [k, checkHeadFont(v) ? prevFont[k] ?? DEFAULT_HEAD_FONT[k] : v];
   }));
+  const logoHeight = Number(raw?.logo?.height);
+  const logo = { height: checkLogoHeight(logoHeight) ? (fallback.logo ?? DEFAULT_LOGO).height : logoHeight };
   return {
     indicators,
     render,
@@ -179,6 +190,7 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
     subPane,
     brand,
     headFont,
+    logo,
     // 旧版本的设置里没有这一项：用默认值
     drawLine: checkDrawLine(drawLine) ? fallback.drawLine ?? DEFAULT_SETTINGS.drawLine : Math.round(drawLine * 10) / 10,
   };

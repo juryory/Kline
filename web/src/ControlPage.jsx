@@ -430,7 +430,7 @@ export default function ControlPage() {
 
       {settingsOpen && state && (
         <SettingsPanel
-          settings={state.settings}
+          settings={state.settings} logoVersion={state.logoVersion}
           showSync={['local', 'ifind'].includes(status?.source)} canSwitchSource={auth?.role === 'admin'}
           onClose={() => setSettingsOpen(false)}
           onSave={(settings) => { set({ settings }); setSettingsOpen(false); }}

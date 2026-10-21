@@ -1,8 +1,9 @@
 import DataSourceSection from './DataSourceSection.jsx';
+import { logoSrc } from './BroadcastPanel.jsx';
 import { useEffect, useState } from 'react';
 import {
-  INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, DEFAULT_SAFE_AREA, DEFAULT_SUB_PANE, DEFAULT_BRAND, DEFAULT_HEAD_FONT, checkIndicator, checkDrawLine,
-  checkSafeSide, checkSafeOpacity, checkSafeColor, checkSafeBorder, checkBrandSize, checkHeadFont, checkSubPane, safeAreaFill,
+  INDICATOR_SPECS, RENDER_LIMITS, DEFAULT_SETTINGS, DRAW_LINE_PRESETS, DEFAULT_SAFE_AREA, DEFAULT_SUB_PANE, DEFAULT_BRAND, DEFAULT_HEAD_FONT, DEFAULT_LOGO, LOGO_MAX_BYTES, checkIndicator, checkDrawLine,
+  checkSafeSide, checkSafeOpacity, checkSafeColor, checkSafeBorder, checkBrandSize, checkHeadFont, checkLogoHeight, checkSubPane, safeAreaFill,
 } from '../../shared/settings.js';
 import { DRAW_COLOR } from './drawTools.js';
 
@@ -34,6 +35,7 @@ const toDraft = (s) => ({
     topWidth: String(topWidth ?? DEFAULT_SAFE_AREA.topWidth), topColor: topColor ?? DEFAULT_SAFE_AREA.topColor }))(s.safeArea ?? DEFAULT_SAFE_AREA),
   brand: (({ size, color }) => ({ size: String(size), color }))(s.brand ?? DEFAULT_BRAND),
   headFont: Object.fromEntries(Object.keys(DEFAULT_HEAD_FONT).map((k) => [k, String(s.headFont?.[k] ?? DEFAULT_HEAD_FONT[k])])),
+  logo: { height: String(s.logo?.height ?? DEFAULT_LOGO.height) },
   subPane: (({ control, render }) => ({ control: String(control), render: String(render) }))(s.subPane ?? DEFAULT_SUB_PANE),
 });
 const toNumbers = (arr) => arr.map((v) => (v.trim() === '' ? NaN : Number(v)));
@@ -166,10 +168,49 @@ function SyncSection() {
 }
 
 /**
+ * 页头 logo 图片：上传 / 恢复默认直接提交到服务端，立即推给所有画面（不走「保存并应用」）。
+ * 预览按草稿里的高度显示
+ */
+function LogoUpload({ version, height }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const send = async (method, body) => {
+    setBusy(true); setError('');
+    try {
+      const response = await fetch('/api/logo', { method, body });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || '上传失败');
+    } catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+  const pick = (e) => {
+    const file = e.target.files[0];
+    e.target.value = ''; // 同一个文件再选一次也能触发
+    if (!file) return;
+    if (file.size > LOGO_MAX_BYTES) return setError('图片太大（最大 512KB）');
+    send('POST', file);
+  };
+  return (
+    <div className="param-row">
+      <span className="param-name">图片</span>
+      <div className="param-inputs">
+        <span className="logo-sample">{height > 0 ? <img src={logoSrc(version)} alt="" style={{ height }} /> : '不显示'}</span>
+        <label className={`file-button ${busy ? 'busy' : ''}`}>
+          {busy ? '上传中…' : '上传图片'}
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} onChange={pick} />
+        </label>
+        {version > 0 && <button className="add" disabled={busy} onClick={() => send('DELETE')}>恢复默认图片</button>}
+      </div>
+      {error && <span className="param-error">{error}</span>}
+    </div>
+  );
+}
+
+/**
  * 导播台设置：左侧分类菜单（直播画面 / 图表与画线 / 指标参数 / 数据源 / 数据同步），右侧是该分类的设置项。
  * 各分类的修改先存在草稿里，「保存并应用」一起提交；服务端校验、落盘并广播到所有画面。数据源切换即时生效，不走保存
  */
-export default function SettingsPanel({ settings, showSync, canSwitchSource, onSave, onClose }) {
+export default function SettingsPanel({ settings, logoVersion, showSync, canSwitchSource, onSave, onClose }) {
   const [draft, setDraft] = useState(() => toDraft(settings));
   const [tab, setTab] = useState(() => {
     try { return localStorage.getItem(TAB_KEY) || 'screen'; } catch { return 'screen'; }
@@ -202,6 +243,7 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
   const brandErr = checkBrandSize(Number(draft.brand.size)) || checkSafeColor(draft.brand.color);
   const fontErr = Object.fromEntries(Object.keys(DEFAULT_HEAD_FONT).map((k) => [k, checkHeadFont(Number(draft.headFont[k]))]));
   const setFont = (k, v) => setDraft((d) => ({ ...d, headFont: { ...d.headFont, [k]: v } }));
+  const logoErr = checkLogoHeight(Number(draft.logo.height));
   const setBrand = (patch) => setDraft((d) => ({ ...d, brand: { ...d.brand, ...patch } }));
   const fillErr = safeOpacityErr || safeColorErr;
   const fill = fillErr ? null : safeAreaFill({ color: draft.safeArea.color, opacity: Number(draft.safeArea.opacity) });
@@ -211,7 +253,7 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
   const setSafe = (patch) => setDraft((d) => ({ ...d, safeArea: { ...d.safeArea, ...patch } }));
   const subErr = { control: checkSubPane('control', Number(draft.subPane.control)), render: checkSubPane('render', Number(draft.subPane.render)) };
   const setSub = (k, v) => setDraft((d) => ({ ...d, subPane: { ...d.subPane, [k]: v } }));
-  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeSideErr || borderErr || topErr || brandErr || Object.values(fontErr).some(Boolean) || fillErr || subErr.control || subErr.render;
+  const invalid = Object.values(errors).some(Boolean) || wErr || hErr || lineErr || safeSideErr || borderErr || topErr || brandErr || logoErr || Object.values(fontErr).some(Boolean) || fillErr || subErr.control || subErr.render;
 
   const save = () => {
     if (invalid) return;
@@ -226,13 +268,14 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
       },
       brand: { size: Number(draft.brand.size), color: draft.brand.color },
       headFont: Object.fromEntries(Object.entries(draft.headFont).map(([k, v]) => [k, Number(v)])),
+      logo: { height: Number(draft.logo.height) },
       subPane: { control: Number(draft.subPane.control), render: Number(draft.subPane.render) },
     });
   };
 
   // 每个分类里有不合法的输入时，左侧菜单标红点（保存按钮不可用时能找到是哪一页）
   const tabErr = {
-    screen: !!(wErr || hErr || fillErr || safeSideErr || borderErr || topErr || brandErr || Object.values(fontErr).some(Boolean)),
+    screen: !!(wErr || hErr || fillErr || safeSideErr || borderErr || topErr || brandErr || logoErr || Object.values(fontErr).some(Boolean)),
     chart: !!(subErr.control || subErr.render || lineErr),
     indicators: Object.values(errors).some(Boolean),
   };
@@ -323,6 +366,19 @@ export default function SettingsPanel({ settings, showSync, canSwitchSource, onS
                 </div>
                 <p className="note">画面底色：K 线、排名、宏观图的背景和两侧安全区外共用（透明度 0 = 完全透明，vMix 里只叠加内容）。</p>
                 <p className="note">安全区外：画面左右两侧直播时容易被裁掉，只铺底色，K 线和文字放在中间，0 = 不留。左右边框画在安全区外靠内容的一侧，不占内容宽度；上边框横跨整个画面最上方。边框宽度 0 = 不画。</p>
+              </section>
+
+              <section>
+                <h3>Logo</h3>
+                <LogoUpload version={logoVersion} height={logoErr ? 0 : Number(draft.logo.height)} />
+                <div className="param-row">
+                  <span className="param-name">高度</span>
+                  <div className="param-inputs">
+                    <label><input value={draft.logo.height} inputMode="numeric" onChange={(e) => setDraft((d) => ({ ...d, logo: { height: e.target.value } }))} /> px</label>
+                  </div>
+                  {logoErr && <span className="param-error">{logoErr}</span>}
+                </div>
+                <p className="note">直播画面页头最左边的图片（K 线和排名页）。上传 / 恢复默认图片立即生效，不用点保存；高度点「保存并应用」后生效，按 966×320 计算，0 = 不显示。支持 PNG / JPEG / WebP / GIF，最大 512KB，建议透明底 PNG、高度 100～200 像素。</p>
               </section>
 
               <section>

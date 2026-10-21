@@ -39,7 +39,7 @@ export default function RenderPage({ preview }) {
   const top = safe?.topWidth ? (
     <div style={{ position: 'absolute', left: 0, top: 0, width, height: safe.topWidth, background: safe.topColor, zIndex: 1 }} />
   ) : null;
-  const { brand, headFont } = state.settings;
+  const { brand, headFont, logo } = state.settings;
 
   // 导播"隐藏"时渐隐；导播台预览里保留半透明
   const opacity = state.visible ? 1 : preview ? 0.35 : 0;
@@ -49,6 +49,7 @@ export default function RenderPage({ preview }) {
       position: 'relative', width, height, opacity, transition: 'opacity 400ms ease', display: 'flex', '--panel-bg': fill,
       ...(brand && { '--brand-size': brand.size, '--brand-color': brand.color }),
       ...(headFont && { '--font-name': headFont.name, '--font-price': headFont.price, '--font-pct': headFont.pct }),
+      ...(logo && { '--logo-h': logo.height }),
     }}>
       {top}
       {side('borderRight')}

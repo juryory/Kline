@@ -1,6 +1,6 @@
 import { RANK_COLUMNS, columnLabel, fmtDate } from './rankColumns.js';
 import { contentSize, renderScale } from '../../shared/settings.js';
-import { BRAND } from './BroadcastPanel.jsx';
+import { BRAND, logoSrc } from './BroadcastPanel.jsx';
 import './panel.css';
 
 /**
@@ -16,7 +16,7 @@ export default function RankPanel({ rank, state }) {
     <div className="panel rank" style={{ '--s': scale }}>
       <div className="head">
         <div className="title">
-          <img className="logo" src="/logo.png" alt="" />
+          {state.settings.logo.height > 0 && <img className="logo" src={logoSrc(state.logoVersion)} alt="" />}
           <span className="name">{title}</span>
           <span className="code">{fmtDate(rank.date)}{rank.liveAt ? ` ${rank.liveAt.slice(0, 5)}` : ''}</span>
         </div>

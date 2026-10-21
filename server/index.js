@@ -28,7 +28,7 @@ import { findSymbol, defaultSymbol, loadUniverse, search, publicSymbol } from '.
 import { getDaily, getIntraday, getMinutes, aggregate, clearMarketCache } from './market.js';
 import { periodsFor, findPeriod } from '../shared/periods.js';
 import { marketPhase } from './ifind-live.js';
-import { DEFAULT_SETTINGS, cleanSettings } from '../shared/settings.js';
+import { DEFAULT_SETTINGS, cleanSettings, LOGO_MAX_BYTES } from '../shared/settings.js';
 import { RANK_LISTS, RANK_SORTS, sortRows, clearRankingCache } from './rank.js';
 import { MACRO_DATASETS, DEFAULT_MACRO, findMacroView } from '../shared/macro.js';
 import { initSync, startSync, startSchedule, syncInfo, isSyncing, lastSyncAt } from './sync-runner.js';
@@ -40,6 +40,8 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'dist');
 const STATE_FILE = path.resolve(ROOT, process.env.STATE_FILE || '.runtime/state.json');
+// 导播台上传的品牌 logo：放在状态文件旁边（Docker 里在数据卷，重建镜像不丢）
+const LOGO_FILE = path.join(path.dirname(STATE_FILE), 'brand-logo');
 const PORT = +(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const REFRESH_MS = +(process.env.REFRESH_MS || 5 * 60_000);
@@ -76,6 +78,7 @@ const DEFAULT_STATE = {
   macro: DEFAULT_MACRO, // 宏观数据页当前图表：{ view }，见 shared/macro.js
   drawings: {},        // K 线画线：{ 标的代码: [{ id, name, points: [{ t 时间戳, v 价格 }], text?, pane?, sub? }] }，各周期共用
   intradayDate: null,  // 分时看的是哪天（'YYYY-MM-DD'，导播台双击日K 进入）；null = 最近一个交易日
+  logoVersion: 0,      // 上传的 logo 版本（上传时间戳），直播画面用 /brand-logo?v=版本；0 = 用默认 /logo.png
 };
 
 // 画线：可用的图形（KLineChart 内置 overlay），与 web/src/drawTools.js 一致
@@ -171,10 +174,28 @@ function loadState() {
     s.macro = findMacroView(s.macro?.view) ? cleanMacro(s.macro, DEFAULT_MACRO) : DEFAULT_MACRO;
     s.drawings = cleanDrawings(s.drawings);
     s.intradayDate = s.period === 'T' ? cleanDay(s.intradayDate) : null;
+    s.logoVersion = Number.isSafeInteger(s.logoVersion) && s.logoVersion > 0 ? s.logoVersion : 0;
     return s;
   } catch {
     return { ...DEFAULT_STATE };
   }
+}
+
+/** 按文件头认图片格式（不看请求头）；只收 PNG / JPEG / WebP / GIF，不收 SVG（可以带脚本） */
+function imageType(buf) {
+  if (buf.length < 12) return null;
+  if (buf.readUInt32BE(0) === 0x89504e47 && buf.readUInt32BE(4) === 0x0d0a1a0a) return 'image/png';
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  if (/^GIF8[79]a$/.test(buf.toString('latin1', 0, 6))) return 'image/gif';
+  return null;
+}
+
+function readLogo() {
+  try {
+    const buf = fs.readFileSync(LOGO_FILE);
+    return imageType(buf) ? buf : null;
+  } catch { return null; }
 }
 
 function saveState() {
@@ -191,6 +212,9 @@ function cleanView(v) {
 }
 
 let state = loadState();
+// 上传的 logo 读进内存（最大 512KB），直播画面请求时直接发；文件丢了就回到默认图片
+let logoBuf = readLogo();
+if (!logoBuf) state.logoVersion = 0;
 let current = null;   // 最近一次推送的 data 消息，新连接直接补发
 let lastError = null;
 let loadSeq = 0;
@@ -497,6 +521,36 @@ async function changeSource(req, res) {
   finally { changingSource = false; }
 }
 
+/** 换 logo：POST 上传图片（请求体就是图片文件），DELETE 恢复默认。立即生效，推给所有画面 */
+async function changeLogo(req, res) {
+  try {
+    if (req.method === 'DELETE') {
+      fs.rmSync(LOGO_FILE, { force: true });
+      logoBuf = null;
+    } else {
+      if (+req.headers['content-length'] > LOGO_MAX_BYTES) return sendJson(res, { error: '图片太大（最大 512KB）' }, 413);
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > LOGO_MAX_BYTES) throw new Error('图片太大（最大 512KB）');
+        chunks.push(chunk);
+      }
+      const buf = Buffer.concat(chunks);
+      if (!imageType(buf)) throw new Error('只支持 PNG / JPEG / WebP / GIF 图片');
+      fs.mkdirSync(path.dirname(LOGO_FILE), { recursive: true });
+      fs.writeFileSync(`${LOGO_FILE}.tmp`, buf);
+      fs.renameSync(`${LOGO_FILE}.tmp`, LOGO_FILE);
+      logoBuf = buf;
+    }
+    // 版本号用时间戳：直播画面换 URL 才重新下载，平时走浏览器缓存
+    state = { ...state, logoVersion: logoBuf ? Math.max(Date.now(), state.logoVersion + 1) : 0 };
+    saveState();
+    broadcast({ type: 'state', state });
+    sendJson(res, { ok: true, logoVersion: state.logoVersion });
+  } catch (err) { sendJson(res, { error: err.message }, 400); }
+}
+
 function handleHttp(req, res) {
   const url = new URL(req.url, 'http://x');
 
@@ -572,6 +626,23 @@ function handleHttp(req, res) {
   }
   if (url.pathname === '/api/health') {
     return sendJson(res, { ok: !lastError, state, ...statusMsg() });
+  }
+  if (url.pathname === '/api/logo') {
+    if (!['POST', 'DELETE'].includes(req.method)) return sendJson(res, { error: '方法不允许' }, 405);
+    changeLogo(req, res);
+    return;
+  }
+  // 上传的 logo：和页面里的图片一样不需要登录（直播画面的 img 带不上 key）；带版本号的 URL 长期缓存
+  if (url.pathname === '/brand-logo') {
+    if (!logoBuf) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      return res.end('没有上传 logo');
+    }
+    res.writeHead(200, {
+      'content-type': imageType(logoBuf), 'x-content-type-options': 'nosniff',
+      'cache-control': url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'no-cache',
+    });
+    return res.end(logoBuf);
   }
 
   // 生产模式：托管 vite build 出来的页面，前端路由回退到 index.html

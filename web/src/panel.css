@@ -23,7 +23,8 @@
 }
 .panel .head { display: flex; justify-content: space-between; align-items: center; }
 .panel .title { display: flex; align-items: baseline; gap: calc(10px * var(--s)); }
-.panel .logo { height: calc(24px * var(--s)); align-self: center; display: block; }
+/* logo 高度来自设置（RenderPage 设置 --logo-h，按 966×320 基准）；太宽的图按比例缩进最大宽度 */
+.panel .logo { height: calc(var(--logo-h, 24) * 1px * var(--s)); max-width: calc(240px * var(--s)); object-fit: contain; align-self: center; display: block; }
 .panel .day { color: #ffd98a; font-size: calc(12px * var(--s)); }
 .panel .head-right { display: flex; align-items: center; gap: calc(12px * var(--s)); }
 /* 字号、颜色来自设置（RenderPage 设置 --brand-size / --brand-color） */

@@ -4,6 +4,8 @@ import { contentSize, renderScale, isSymbolMasked, maskName } from '../../shared
 import './panel.css';
 
 export const BRAND = '围炉财经 · 数据中台';
+/** 页头 logo：导播台上传过就用上传的（版本号变了浏览器才重新下载），否则用默认图片 */
+export const logoSrc = (version) => (version ? `/brand-logo?v=${version}` : '/logo.png');
 
 /**
  * 直播画面，尺寸来自导播台设置（默认 966×320）。
@@ -20,7 +22,7 @@ export default function BroadcastPanel({ data, state, status }) {
     <div className="panel" style={{ '--s': scale }}>
       <div className="head">
         <div className="title">
-          <img className="logo" src="/logo.png" alt="" />
+          {state.settings.logo.height > 0 && <img className="logo" src={logoSrc(state.logoVersion)} alt="" />}
           <span className="name">{masked ? maskName(data.symbol.name) : data.symbol.name}</span>
           {!masked && <span className="code">{data.symbol.code}</span>}
           <span className={`price ${q.trend}`}>{q.close}</span>

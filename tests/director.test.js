@@ -48,6 +48,14 @@ test('设置：页头字号（名称 / 最新价 / 涨跌幅），旧设置用�
   assert.deepEqual(cleanSettings({ headFont: { name: 100, price: 7, pct: 16.5 } }, set).headFont, { name: 28, price: 30, pct: 18 });
 });
 
+test('设置：logo 高度，旧设置用默认值，0 = 不显示，不合法回退', () => {
+  assert.deepEqual(cleanSettings({}).logo, { height: 24 });
+  const set = cleanSettings({ logo: { height: 0 } });
+  assert.equal(set.logo.height, 0);
+  assert.equal(cleanSettings({ logo: { height: 81 } }, set).logo.height, 0);
+  assert.equal(cleanSettings({ logo: { height: 30.5 } }, cleanSettings({ logo: { height: 40 } })).logo.height, 40);
+});
+
 const at = (s) => Date.parse(`${s}+08:00`);
 /** 一天的 1 分钟线（只放几根，够看出是哪天） */
 const minutes = (day, base) => ['09:31', '09:32', '15:00'].map((hm, i) => ({
@@ -134,4 +142,25 @@ test('导播：双击日K 看某天分时、退回日K 带回视图；方框、�
   assert.equal(drawn[0].name, 'rect');
   assert.deepEqual([drawn[1].pane, drawn[1].sub], ['sub', 'MACD']);
   assert.equal(drawn[2].pane, undefined);
+
+  // logo：没上传时 404；上传 PNG 后推新版本、能读回；不是图片拒收；恢复默认后版本归 0
+  assert.equal((await fetch(`${base}/brand-logo`)).status, 404);
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(32, 1)]);
+  const up = await (await fetch(`${base}/api/logo`, { method: 'POST', body: png })).json();
+  assert.ok(up.logoVersion > 0);
+  assert.equal((await waitFor((m) => m.type === 'state' && m.state.logoVersion === up.logoVersion)).state.logoVersion, up.logoVersion);
+  const got = await fetch(`${base}/brand-logo?v=${up.logoVersion}`);
+  assert.equal(got.headers.get('content-type'), 'image/png');
+  assert.match(got.headers.get('cache-control'), /immutable/);
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), png);
+  const svg = await fetch(`${base}/api/logo`, { method: 'POST', body: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' });
+  assert.equal(svg.status, 400);
+  assert.match((await svg.json()).error, /只支持/);
+  const big = await fetch(`${base}/api/logo`, { method: 'POST', body: Buffer.concat([png, Buffer.alloc(512 * 1024)]) });
+  assert.equal(big.status, 413);
+  assert.equal((await get('/api/health')).state.logoVersion, up.logoVersion);
+  assert.ok(fs.existsSync(path.join(dir, 'brand-logo')));
+  assert.equal((await (await fetch(`${base}/api/logo`, { method: 'DELETE' })).json()).logoVersion, 0);
+  assert.equal((await fetch(`${base}/brand-logo`)).status, 404);
+  assert.equal(fs.existsSync(path.join(dir, 'brand-logo')), false);
 });

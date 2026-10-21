@@ -13,6 +13,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': `http://${backend}`,
+      '/brand-logo': `http://${backend}`,
       '/ws': { target: `ws://${backend}`, ws: true },
     },
   },
