@@ -39,8 +39,15 @@ export const BASE_SIZE = { width: 966, height: 320 };
 export const SAFE_SIDE_MAX = 0.3;
 // color / opacity 是整个直播画面的底色：K 线面板和两侧安全区外用同一个颜色
 // borderWidth / borderColor：安全区外靠内容一侧的竖边框（px，0 = 不画），画在安全区外里面，不占内容宽度
-export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100, borderWidth: 0, borderColor: '#c8161d' };
+// topWidth / topColor：整个画面（K 线和安全区外）最上方的横边框（px，0 = 不画），盖在画面上，不占内容高度
+export const DEFAULT_SAFE_AREA = { side: 0, color: '#140709', opacity: 100, borderWidth: 0, borderColor: '#c8161d', topWidth: 0, topColor: '#c8161d' };
 export const SAFE_BORDER_MAX = 20;
+/** 页头品牌文字「围炉财经 · 数据中台」：字号按 966×320 基准（画面放大时按比例放大），颜色 */
+export const BRAND_SIZE_LIMITS = { min: 8, max: 40 };
+export const DEFAULT_BRAND = { size: 12, color: '#9b8a8a' };
+/** 页头字号：标的名称 / 最新价 / 涨跌幅，按 966×320 基准（画面放大时按比例放大） */
+export const HEAD_FONT_LIMITS = { min: 8, max: 60 };
+export const DEFAULT_HEAD_FONT = { name: 20, price: 22, pct: 14 };
 /** 副图高度（px）：导播台按实际像素；直播画面按 966×320 基准，画面放大时按比例加高 */
 export const SUB_PANE_LIMITS = { control: { min: 60, max: 400 }, render: { min: 30, max: 160 } };
 export const DEFAULT_SUB_PANE = { control: 140, render: 60 };
@@ -59,6 +66,8 @@ export const DEFAULT_SETTINGS = {
   drawLine: 1.5,
   safeArea: { ...DEFAULT_SAFE_AREA },
   subPane: { ...DEFAULT_SUB_PANE },
+  brand: { ...DEFAULT_BRAND },
+  headFont: { ...DEFAULT_HEAD_FONT },
 };
 
 /** 安全区外宽度校验（每侧，px）：不合法返回错误描述 */
@@ -69,6 +78,14 @@ export function checkSafeSide(v, width) {
 export const checkSafeOpacity = (v) => (Number.isInteger(v) && v >= 0 && v <= 100 ? null : '0~100 的整数');
 export const checkSafeColor = (v) => (/^#[0-9a-f]{6}$/i.test(v ?? '') ? null : '颜色格式 #rrggbb');
 export const checkSafeBorder = (v) => (Number.isInteger(v) && v >= 0 && v <= SAFE_BORDER_MAX ? null : `0~${SAFE_BORDER_MAX} 的整数`);
+export const checkHeadFont = (v) => {
+  const { min, max } = HEAD_FONT_LIMITS;
+  return Number.isInteger(v) && v >= min && v <= max ? null : `${min}~${max} 的整数`;
+};
+export const checkBrandSize = (v) => {
+  const { min, max } = BRAND_SIZE_LIMITS;
+  return Number.isInteger(v) && v >= min && v <= max ? null : `${min}~${max} 的整数`;
+};
 
 /** 副图高度校验（k = control / render）：不合法返回错误描述 */
 export function checkSubPane(k, v) {
@@ -127,6 +144,8 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
   const color = raw?.safeArea?.color;
   const borderWidth = Number(raw?.safeArea?.borderWidth);
   const borderColor = raw?.safeArea?.borderColor;
+  const topWidth = Number(raw?.safeArea?.topWidth);
+  const topColor = raw?.safeArea?.topColor;
   const safeArea = {
     side: checkSafeSide(side, render.width) ? Math.min(prevSafe.side, Math.floor(render.width * SAFE_SIDE_MAX)) : side,
     color: checkSafeColor(color) ? prevSafe.color : color.toLowerCase(),
@@ -134,17 +153,32 @@ export function cleanSettings(raw, fallback = DEFAULT_SETTINGS) {
     // 旧版本没有边框：不画
     borderWidth: checkSafeBorder(borderWidth) ? prevSafe.borderWidth ?? DEFAULT_SAFE_AREA.borderWidth : borderWidth,
     borderColor: checkSafeColor(borderColor) ? prevSafe.borderColor ?? DEFAULT_SAFE_AREA.borderColor : borderColor.toLowerCase(),
+    topWidth: checkSafeBorder(topWidth) ? prevSafe.topWidth ?? DEFAULT_SAFE_AREA.topWidth : topWidth,
+    topColor: checkSafeColor(topColor) ? prevSafe.topColor ?? DEFAULT_SAFE_AREA.topColor : topColor.toLowerCase(),
+  };
+  const prevBrand = fallback.brand ?? DEFAULT_BRAND;
+  const brandSize = Number(raw?.brand?.size);
+  const brand = {
+    size: checkBrandSize(brandSize) ? prevBrand.size : brandSize,
+    color: checkSafeColor(raw?.brand?.color) ? prevBrand.color : raw.brand.color.toLowerCase(),
   };
   const prevSub = fallback.subPane ?? DEFAULT_SUB_PANE;
   const subPane = Object.fromEntries(Object.keys(SUB_PANE_LIMITS).map((k) => {
     const v = Number(raw?.subPane?.[k]);
     return [k, checkSubPane(k, v) ? prevSub[k] : v];
   }));
+  const prevFont = fallback.headFont ?? DEFAULT_HEAD_FONT;
+  const headFont = Object.fromEntries(Object.keys(DEFAULT_HEAD_FONT).map((k) => {
+    const v = Number(raw?.headFont?.[k]);
+    return [k, checkHeadFont(v) ? prevFont[k] ?? DEFAULT_HEAD_FONT[k] : v];
+  }));
   return {
     indicators,
     render,
     safeArea,
     subPane,
+    brand,
+    headFont,
     // 旧版本的设置里没有这一项：用默认值
     drawLine: checkDrawLine(drawLine) ? fallback.drawLine ?? DEFAULT_SETTINGS.drawLine : Math.round(drawLine * 10) / 10,
   };

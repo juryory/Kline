@@ -35,11 +35,22 @@ export default function RenderPage({ preview }) {
     <div style={{ width: safe.side, height, flex: 'none', boxSizing: 'border-box', background: fill, [edge]: border }} />
   ) : null;
 
+  // 最上方横边框：横跨 K 线和两侧安全区外，盖在画面上（不改变内容高度）
+  const top = safe?.topWidth ? (
+    <div style={{ position: 'absolute', left: 0, top: 0, width, height: safe.topWidth, background: safe.topColor, zIndex: 1 }} />
+  ) : null;
+  const { brand, headFont } = state.settings;
+
   // 导播"隐藏"时渐隐；导播台预览里保留半透明
   const opacity = state.visible ? 1 : preview ? 0.35 : 0;
 
   return (
-    <div style={{ width, height, opacity, transition: 'opacity 400ms ease', display: 'flex', '--panel-bg': fill }}>
+    <div style={{
+      position: 'relative', width, height, opacity, transition: 'opacity 400ms ease', display: 'flex', '--panel-bg': fill,
+      ...(brand && { '--brand-size': brand.size, '--brand-color': brand.color }),
+      ...(headFont && { '--font-name': headFont.name, '--font-price': headFont.price, '--font-pct': headFont.pct }),
+    }}>
+      {top}
       {side('borderRight')}
       <div style={{ width: contentSize(state.settings).width, height, flex: 'none' }}>
         {state.scene === 'rank' ? rank && <RankPanel rank={rank} state={state} />

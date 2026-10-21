@@ -26,11 +26,13 @@
 .panel .logo { height: calc(24px * var(--s)); align-self: center; display: block; }
 .panel .day { color: #ffd98a; font-size: calc(12px * var(--s)); }
 .panel .head-right { display: flex; align-items: center; gap: calc(12px * var(--s)); }
-.panel .brand { color: var(--muted); font-weight: 600; font-size: calc(12px * var(--s)); letter-spacing: 0.05em; white-space: nowrap; }
-.panel .name { font-weight: 700; font-size: calc(20px * var(--s)); }
+/* 字号、颜色来自设置（RenderPage 设置 --brand-size / --brand-color） */
+.panel .brand { color: var(--brand-color, var(--muted)); font-weight: 600; font-size: calc(var(--brand-size, 12) * 1px * var(--s)); letter-spacing: 0.05em; white-space: nowrap; }
+/* 页头字号来自设置（RenderPage 设置 --font-name / --font-price / --font-pct，按 966×320 基准） */
+.panel .name { font-weight: 700; font-size: calc(var(--font-name, 20) * 1px * var(--s)); }
 .panel .code { color: var(--muted); font-size: calc(11px * var(--s)); }
-.panel .price { font-weight: 700; font-size: calc(22px * var(--s)); }
-.panel .pct { font-size: calc(14px * var(--s)); }
+.panel .price { font-weight: 700; font-size: calc(var(--font-price, 22) * 1px * var(--s)); }
+.panel .pct { font-size: calc(var(--font-pct, 14) * 1px * var(--s)); }
 .panel .up { color: var(--up); }
 .panel .down { color: var(--down); }
 .panel .periods { display: flex; gap: calc(6px * var(--s)); }

@@ -28,6 +28,26 @@ test('设置：安全区外边框，旧设置没有这一项时不画，不合�
   assert.deepEqual([bad.safeArea.borderWidth, bad.safeArea.borderColor], [3, '#ffcc4d']);
 });
 
+test('设置：上边框、品牌文字字号和颜色，旧设置用默认值，不合法回退', () => {
+  const old = cleanSettings({ safeArea: { side: 40, color: '#102040', opacity: 70 } });
+  assert.deepEqual([old.safeArea.topWidth, old.safeArea.topColor], [0, '#c8161d']);
+  assert.deepEqual(old.brand, { size: 12, color: '#9b8a8a' });
+  const set = cleanSettings({ safeArea: { ...old.safeArea, topWidth: 4, topColor: '#FFFFFF' }, brand: { size: 18, color: '#FFCC4D' } }, old);
+  assert.deepEqual([set.safeArea.topWidth, set.safeArea.topColor], [4, '#ffffff']);
+  assert.deepEqual(set.brand, { size: 18, color: '#ffcc4d' });
+  const bad = cleanSettings({ safeArea: { ...set.safeArea, topWidth: 30 }, brand: { size: 4, color: 'x' } }, set);
+  assert.equal(bad.safeArea.topWidth, 4);
+  assert.deepEqual(bad.brand, { size: 18, color: '#ffcc4d' });
+});
+
+test('设置：页头字号（名称 / 最新价 / 涨跌幅），旧设置用默认值，不合法回退', () => {
+  const old = cleanSettings({});
+  assert.deepEqual(old.headFont, { name: 20, price: 22, pct: 14 });
+  const set = cleanSettings({ headFont: { name: 28, price: 30, pct: 18 } }, old);
+  assert.deepEqual(set.headFont, { name: 28, price: 30, pct: 18 });
+  assert.deepEqual(cleanSettings({ headFont: { name: 100, price: 7, pct: 16.5 } }, set).headFont, { name: 28, price: 30, pct: 18 });
+});
+
 const at = (s) => Date.parse(`${s}+08:00`);
 /** 一天的 1 分钟线（只放几根，够看出是哪天） */
 const minutes = (day, base) => ['09:31', '09:32', '15:00'].map((hm, i) => ({
