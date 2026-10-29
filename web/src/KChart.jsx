@@ -104,7 +104,7 @@ export default function KChart({
 
   // 事件处理和 ResizeObserver 里要读最新的 props
   const latest = useRef();
-  latest.current = { data, view, sub, onViewChange, minBars, onDrawEnd, onDrawChange, onDrawSelect, onDrawDelete, showDelete, lineWidth, onBarDoubleClick };
+  latest.current = { data, view, sub, drawings, readOnly, onViewChange, minBars, onDrawEnd, onDrawChange, onDrawSelect, onDrawDelete, showDelete, lineWidth, onBarDoubleClick };
   const styles = () => drawStyles(scale, latest.current.lineWidth);
   // 画线交互状态：鼠标在画线上 / 正在绘制时，不触发拖拽平移
   // hover：鼠标在画线上；editing：正在拖动画线端点（触屏没有 hover，靠它避免同时平移）；dragDraw：触屏拖动画线中
@@ -446,6 +446,7 @@ export default function KChart({
     };
 
     const onDown = (e) => {
+      if (e.pointerType === 'touch' && twoFingerTap?.paired && drawState.current.dragDraw) return;
       if (drawState.current.dragDraw) { if (e.button === 0) drawDown(e); return; }
       // 绘制中、或按在画线上（拖动端点）时不平移
       if (e.button !== 0 || locked() || drawState.current.pendingId || drawState.current.hover) return;
@@ -483,12 +484,55 @@ export default function KChart({
       else drag = null;
     };
 
+    // Track touch taps separately: drawing mode does not populate navigation pointers.
+    const touches = new Map();
+    let twoFingerTap = null;
+    const touchDown = (e) => {
+      if (e.pointerType !== 'touch') return;
+      const now = performance.now();
+      if (!touches.size) twoFingerTap = { time: now, valid: true, paired: false };
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size === 2) {
+        twoFingerTap.paired = true;
+        if (now - twoFingerTap.time > 150) twoFingerTap.valid = false;
+        tap = lastTap = null;
+        const dd = drawState.current.dragDraw;
+        if (dd?.start) {
+          chartRef.current?.removeOverlay(dd.id);
+          dd.start = null;
+        }
+      } else if (touches.size > 2) twoFingerTap.valid = false;
+    };
+    const touchMove = (e) => {
+      const start = touches.get(e.pointerId);
+      if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) twoFingerTap.valid = false;
+    };
+    const touchUp = (e) => {
+      if (!touches.has(e.pointerId)) return;
+      touchMove(e);
+      if (e.type === 'pointercancel') twoFingerTap.valid = false;
+      touches.delete(e.pointerId);
+      if (touches.size) return;
+      const gesture = twoFingerTap;
+      twoFingerTap = null;
+      if (!gesture?.paired || !gesture.valid || performance.now() - gesture.time > 300 || latest.current.readOnly) return;
+      const drawing = [...(latest.current.drawings ?? [])].reverse().find((d) => drawState.current.shown.has(d.id));
+      if (drawing) latest.current.onDrawDelete?.(drawing.id);
+    };
+    el.addEventListener('pointerdown', touchDown, true);
+    window.addEventListener('pointermove', touchMove, true);
+    window.addEventListener('pointerup', touchUp, true);
+    window.addEventListener('pointercancel', touchUp, true);
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     return () => {
+      el.removeEventListener('pointerdown', touchDown, true);
+      window.removeEventListener('pointermove', touchMove, true);
+      window.removeEventListener('pointerup', touchUp, true);
+      window.removeEventListener('pointercancel', touchUp, true);
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
