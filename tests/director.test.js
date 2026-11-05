@@ -76,6 +76,7 @@ test('导播：双击日K 看某天分时、退回日K 带回视图；方框、�
   const dbPath = path.join(dir, 'market.db');
   const db = new DatabaseSync(dbPath); db.exec(SCHEMA); initIfind(db);
   db.exec("INSERT INTO symbols VALUES ('000001.SH','上证指数','index',NULL)");
+  db.exec("INSERT INTO symbols VALUES ('000300.SH','沪深300','index',NULL)");
   writeIfind(db, 'daily', '000001.SH', [20261016, 20261019, 20261020].map((date, i) =>
     ({ date, open: 3000 + i, high: 3010 + i, low: 2990 + i, close: 3000 + i * 10, vol: 100, amount: 100 })));
   writeIfind(db, 'minute', '000001.SH', [...minutes('2026-10-19', 3100), ...minutes('2026-10-20', 3200)]);
@@ -129,6 +130,17 @@ test('导播：双击日K 看某天分时、退回日K 带回视图；方框、�
   };
   const set = (patch) => { inbox.length = 0; ws.send(JSON.stringify({ type: 'set', patch })); };
   t.after(() => ws.close());
+
+  const quotesPath = '/api/watchlist/quotes';
+  assert.deepEqual((await get(quotesPath)).rows, []);
+  set({ watchlist: ['000300.SH', '000001.SH'] });
+  await waitFor((m) => m.type === 'state' && m.state.watchlist.length === 2);
+  const { rows } = await get(quotesPath);
+  assert.deepEqual(rows.map(({ code, price }) => [code, price]), [['000300.SH', null], ['000001.SH', 3020]]);
+  assert.ok(Math.abs(rows[1].changePercent - (3020 / 3010 - 1) * 100) < 1e-9);
+  set({ watchRemove: '000001.SH' });
+  await waitFor((m) => m.type === 'state' && m.state.watchlist.length === 1);
+  assert.deepEqual((await get(quotesPath)).rows.map(({ code }) => code), ['000300.SH']);
 
   set({ symbol: '000001.SH', period: 'T', intradayDate: '2026-10-19' });
   assert.equal((await waitFor((m) => m.type === 'state')).state.intradayDate, '2026-10-19');

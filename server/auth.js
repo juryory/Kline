@@ -82,7 +82,7 @@ export function authenticate(req, url) {
   const token = bearer || readCookie(req, AUTH_COOKIE) || url.searchParams.get('token');
   const p = token && verifyToken(token);
   if (p) return { role: p.role, user: { id: p.sub ?? null, name: p.name ?? p.sub ?? null }, exp: p.exp };
-  const key = url.searchParams.get('key');
+  const key = req.headers['x-kline-render-key'] || url.searchParams.get('key');
   if (RENDER_KEY && key && safeEqual(Buffer.from(key), Buffer.from(RENDER_KEY))) return { role: 'render', user: null, exp: null };
   return { role: null, user: null, exp: null };
 }

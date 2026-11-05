@@ -36,7 +36,7 @@ test('HTTP 数据源切换：权限、缓存、日线回退、重启持久化与
     child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1',TZ:'Asia/Shanghai',
       DATA_SOURCE:'local',DB_PATH:dbPath,IFIND_DB_PATH:path.join(dir,'ifind.db'),IFIND_INTRADAY_ENABLED:'0',
       DATA_SOURCE_FILE:path.join(dir,'source.json'),STATE_FILE:path.join(dir,'state.json'),
-      AUTH_SECRET:secret,ALLOWED_ORIGINS:'',TUSHARE_TOKEN:'',IFIND_REFRESH_TOKEN:'',IFIND_ACCESS_TOKEN:'',MINUTE_MONTHS:'0',SYNC_EVERY:'0',SYNC_AT:''},stdio:['ignore','pipe','pipe']});
+      AUTH_SECRET:secret,RENDER_KEY:'test-render-key',ALLOWED_ORIGINS:'',TUSHARE_TOKEN:'',IFIND_REFRESH_TOKEN:'',IFIND_ACCESS_TOKEN:'',MINUTE_MONTHS:'0',SYNC_EVERY:'0',SYNC_AT:''},stdio:['ignore','pipe','pipe']});
     let output='';
     await new Promise((resolve,reject)=>{
       const timeout=setTimeout(()=>reject(new Error('服务启动超时 '+output)),5000);
@@ -48,6 +48,10 @@ test('HTTP 数据源切换：权限、缓存、日线回退、重启持久化与
   const base=`http://127.0.0.1:${port}`;
   const request=(url,body,role='admin')=>fetch(base+url,{method:body?'POST':'GET',headers:{authorization:'Bearer '+token(role),origin:base,'content-type':'application/json'},...(body&&{body:JSON.stringify(body)})});
   await start();
+  const renderHeaders = { 'x-kline-render-key': 'test-render-key' };
+  assert.equal((await fetch(base + '/api/watchlist/quotes')).status, 401);
+  assert.equal((await fetch(base + '/api/watchlist/quotes', { headers: renderHeaders })).status, 200);
+  assert.equal((await fetch(base + '/api/health', { headers: renderHeaders })).status, 403);
   const original=await (await request('/api/kline?symbol=510300.SH&period=D')).json();
   assert.equal(original.bars[0].close,2.147);
   assert.equal((await request('/api/data-source',{source:'ifind'},'control')).status,403);

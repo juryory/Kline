@@ -145,6 +145,43 @@ function cleanRank(r, fallback = DEFAULT_RANK) {
   };
 }
 const MAX_WATCH = 200;
+const WATCHLIST_QUOTE_TTL = 30_000;
+let watchlistSnapshot;
+
+function watchlistQuotes() {
+  const watchlist = state.watchlist.slice();
+  const source = adapterName;
+  const key = JSON.stringify([source, watchlist]);
+  if (watchlistSnapshot?.key === key && Date.now() < watchlistSnapshot.expiresAt) {
+    return watchlistSnapshot.result;
+  }
+  const entry = { key, expiresAt: Infinity };
+  watchlistSnapshot = entry;
+  entry.result = (async () => {
+    const rows = [];
+    for (let i = 0; i < watchlist.length; i += 8) {
+      const batch = await Promise.all(watchlist.slice(i, i + 8).map(async ({ code, name }) => {
+        const empty = { code, name, price: null, changePercent: null, timestamp: null };
+        const symbol = findSymbol(code);
+        if (!symbol || source !== adapterName) return empty;
+        try {
+          const daily = await getDaily(symbol);
+          const latest = daily.at(-1);
+          const previous = daily.at(-2);
+          return { code, name, price: latest.close, timestamp: latest.timestamp,
+            changePercent: previous?.close > 0 ? (latest.close / previous.close - 1) * 100 : null };
+        } catch {
+          return empty;
+        }
+      }));
+      rows.push(...batch);
+    }
+    if (source !== adapterName) throw new Error('行情数据源正在切换');
+    return { source, rows };
+  })().finally(() => { entry.expiresAt = Date.now() + WATCHLIST_QUOTE_TTL; });
+  entry.result.catch(() => { if (watchlistSnapshot === entry) watchlistSnapshot = undefined; });
+  return entry.result;
+}
 
 /** 自选列表规整：去重、去掉标的池里已不存在的代码，并刷新名称 */
 function cleanWatchlist(list) {
@@ -462,6 +499,7 @@ function sendJson(res, body, status = 200) {
 // 各接口需要的最低角色；GET /api/sync 查进度是 control，POST 触发同步要 admin（见下面）
 const API_NEED = {
   '/api/macro': 'render', // 直播画面的宏观图也要用
+  '/api/watchlist/quotes': 'render',
   '/api/search': 'control', '/api/rank': 'control', '/api/kline': 'control',
   '/api/health': 'control', '/api/refresh': 'control', '/api/sync': 'control',
 };
@@ -568,6 +606,14 @@ function handleHttp(req, res) {
         ? sendJson(res, { error: need === 'admin' ? '需要管理员权限' : '没有权限' }, 403)
         : sendJson(res, { error: '未登录或登录已过期' }, 401);
     }
+  }
+
+  if (url.pathname === '/api/watchlist/quotes') {
+    if (req.method !== 'GET') return sendJson(res, { error: '方法不允许' }, 405);
+    watchlistQuotes()
+      .then((result) => sendJson(res, result))
+      .catch(() => sendJson(res, { error: '自选行情暂不可用' }, 503));
+    return;
   }
 
   // 导播台「本地浏览」：按需拉某个标的 / 周期的 K 线，不改导播状态、不推给直播画面
