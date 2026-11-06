@@ -4,3 +4,4 @@ dist/
 .env.docker
 .runtime/
 data/
+.env*.local.bak
