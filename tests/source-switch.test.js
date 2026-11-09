@@ -9,6 +9,7 @@ import net from 'node:net';
 import { createHmac } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA } from '../server/db.js';
+import WebSocket from 'ws';
 import { initIfind, writeIfind } from '../server/ifind-store.js';
 
 test('HTTP 数据源切换：权限、缓存、日线回退、重启持久化与无凭证同步禁用', {timeout:20000}, async(t)=>{
@@ -18,6 +19,11 @@ test('HTTP 数据源切换：权限、缓存、日线回退、重启持久化与
   const dbPath=path.join(dir,'market.db');
   const db=new DatabaseSync(dbPath); db.exec(SCHEMA); initIfind(db);
   db.exec("INSERT INTO symbols VALUES ('000001.SH','指数','index',NULL),('510300.SH','测试ETF','etf','ETF'); INSERT INTO daily VALUES ('000001.SH',20261015,10,11,9,10,100,100),('510300.SH',20261014,4,5,3,4.294,100,50),('510300.SH',20261015,5,6,4,5.294,200,60); INSERT INTO adj VALUES ('510300.SH',20261014,2),('510300.SH',20261015,4);");
+  for (const [i, close] of [11, 9, 12, 10].entries()) {
+    const code = '88500' + i + '.TI';
+    db.prepare('INSERT INTO symbols VALUES (?,?,?,?)').run(code, '测试板块' + i, 'board', 'THN');
+    for (const [date, value] of [[20261014,10],[20261015,close]]) db.prepare('INSERT INTO daily VALUES (?,?,?,?,?,?,?,?)').run(code,date,value,value,value,value,100,100);
+  }
   writeIfind(db,'daily','510300.SH',[{date:20261015,open:5,high:6,low:4,close:5.295,vol:210,amount:61}]); db.close();
   const secret='test-secret-only';
   const token=role=>{
@@ -52,6 +58,24 @@ test('HTTP 数据源切换：权限、缓存、日线回退、重启持久化与
   assert.equal((await fetch(base + '/api/watchlist/quotes')).status, 401);
   assert.equal((await fetch(base + '/api/watchlist/quotes', { headers: renderHeaders })).status, 200);
   assert.equal((await fetch(base + '/api/health', { headers: renderHeaders })).status, 403);
+  assert.equal((await fetch(base + '/api/rank/quotes')).status,401);
+  const ranks = await fetch(base + '/api/rank/quotes', {headers:renderHeaders});
+  assert.equal(ranks.status,200);
+  assert.deepEqual((await ranks.json()).rows.map(row=>[row.name,row.rank,row.price]),[
+    ['测试板块2',1,12],['测试板块0',2,11],['测试板块3',3,10],['测试板块1',4,9],
+  ]);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?role=control&token=${token('control')}`);
+  await once(ws,'open');
+  await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('排名设置更新超时')),3000);
+    ws.on('message',raw=>{const message=JSON.parse(raw);if(message.type==='state'&&message.state.rank?.top===3&&message.state.rank.desc===false){clearTimeout(timer);resolve();}});
+    ws.send(JSON.stringify({type:'set',patch:{rank:{list:'THN',sort:'pct',desc:false,top:3}}}));
+  });
+  ws.close();
+  const ascending=await (await fetch(base+'/api/rank/quotes',{headers:renderHeaders})).json();
+  assert.equal(ascending.sort,'pct');
+  assert.deepEqual(ascending.rows.map(row=>row.name),['测试板块1','测试板块3','测试板块0']);
+  assert.ok(ascending.rows[0].changePercent < 0);
   const original=await (await request('/api/kline?symbol=510300.SH&period=D')).json();
   assert.equal(original.bars[0].close,2.147);
   assert.equal((await request('/api/data-source',{source:'ifind'},'control')).status,403);

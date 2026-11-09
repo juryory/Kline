@@ -183,6 +183,23 @@ function watchlistQuotes() {
   return entry.result;
 }
 
+async function rankingQuotes() {
+  if (!HAS_RANK) throw new Error('当前数据源不支持板块排名');
+  const source = adapterName;
+  const { list, sort, desc, top } = state.rank;
+  const result = await adapter.getRanking(list);
+  if (source !== adapterName) throw new Error('行情数据源正在切换');
+  const by = (result.hidden || []).includes(sort) ? 'pct' : sort;
+  return {
+    source, list, listName: result.listName, date: result.date, sort: by, desc, top,
+    rows: sortRows(result.rows, by, desc).slice(0, top).map((row, index) => ({
+      code: row.code, name: row.name, rank: index + 1,
+      price: Number.isFinite(row.close) ? row.close : null,
+      changePercent: Number.isFinite(row.pct) ? row.pct : null,
+    })),
+  };
+}
+
 /** 自选列表规整：去重、去掉标的池里已不存在的代码，并刷新名称 */
 function cleanWatchlist(list) {
   const seen = new Set();
@@ -500,6 +517,7 @@ function sendJson(res, body, status = 200) {
 const API_NEED = {
   '/api/macro': 'render', // 直播画面的宏观图也要用
   '/api/watchlist/quotes': 'render',
+  '/api/rank/quotes': 'render',
   '/api/search': 'control', '/api/rank': 'control', '/api/kline': 'control',
   '/api/health': 'control', '/api/refresh': 'control', '/api/sync': 'control',
 };
@@ -613,6 +631,13 @@ function handleHttp(req, res) {
     watchlistQuotes()
       .then((result) => sendJson(res, result))
       .catch(() => sendJson(res, { error: '自选行情暂不可用' }, 503));
+    return;
+  }
+  if (url.pathname === '/api/rank/quotes') {
+    if (req.method !== 'GET') return sendJson(res, { error: '方法不允许' }, 405);
+    rankingQuotes()
+      .then(result => sendJson(res, result))
+      .catch(() => sendJson(res, { error: '板块排名暂不可用，请检查数据源与板块数据' }, 503));
     return;
   }
 
